@@ -11,9 +11,13 @@ class BondsHandler:
         # check the following attributes exist in config.json
         # bond_climb_rate, positive float
         # bond_stranger_breakaway, positive int
-        # bond_stranger_breakaway_reset_multiplier, float between 0 and 1
+        # bond_stranger_breakaway_reset_multiplier, positive float
+        # bond_stranger_breakaway_reset_negative_multiplier, positive float
         # bond_stranger_messages_breakaway, positive int
-        # bond_stranger_messages_breakaway_multiplier, float between 0 and 1
+        # bond_stranger_messages_breakaway_multiplier, positive float
+        # bond_stranger_messages_breakaway_negative_multiplier, positive float
+        # bond_stranger_negative_bias_multiplier, positive float
+        # bond_negative_bias_multiplier, positive float
         if not path.exists(self.bonds_config_path):
             raise ValueError("Missing bonds config.json file in bonds folder")
         with open(self.bonds_config_path, "r", encoding="utf-8") as f:
@@ -22,9 +26,13 @@ class BondsHandler:
         required_attributes = {
             "bond_climb_rate": "pos_float",
             "bond_stranger_breakaway": "pos_int",
-            "bond_stranger_breakaway_reset_multiplier": "float_0_1",
+            "bond_stranger_breakaway_reset_multiplier": "pos_float",
+            "bond_stranger_breakaway_reset_negative_multiplier": "pos_float",
             "bond_stranger_messages_breakaway": "pos_int",
-            "bond_stranger_messages_breakaway_multiplier": "float_0_1",
+            "bond_stranger_messages_breakaway_multiplier": "pos_float",
+            "bond_stranger_messages_breakaway_negative_multiplier": "pos_float",
+            "bond_stranger_negative_bias_multiplier": "pos_float",
+            "bond_negative_bias_multiplier": "pos_float",
         }
         for attr in required_attributes:
             if attr not in self.bonds_config:
@@ -43,17 +51,22 @@ class BondsHandler:
         self.bond_climb_rate = self.bonds_config["bond_climb_rate"]
         self.bond_stranger_breakaway = self.bonds_config["bond_stranger_breakaway"]
         self.bond_stranger_breakaway_reset_multiplier = self.bonds_config["bond_stranger_breakaway_reset_multiplier"]
+        self.bond_stranger_breakaway_reset_negative_multiplier = self.bonds_config["bond_stranger_breakaway_reset_negative_multiplier"]
         self.bond_stranger_messages_breakaway = self.bonds_config["bond_stranger_messages_breakaway"]
         self.bond_stranger_messages_breakaway_multiplier = self.bonds_config["bond_stranger_messages_breakaway_multiplier"]
+        self.bond_stranger_messages_breakaway_negative_multiplier = self.bonds_config["bond_stranger_messages_breakaway_negative_multiplier"]
+        self.bond_stranger_negative_bias_multiplier = self.bonds_config["bond_stranger_negative_bias_multiplier"]
+        self.bond_negative_bias_multiplier = self.bonds_config["bond_negative_bias_multiplier"]
 
         # list all the files in bonds_folder
         self.bond_files = [f for f in listdir(self.bonds_folder) if f.endswith(".txt")]
         # now we need to see if the bond files have a valid filename, it should be a number between -100 and 100 then a _ and another number between -100 and 100 indicating the bond range
         self.bond_ranges = []
         self.stranger_bond = None
+        self.stranger_bad_bond = None
         for bond_file in self.bond_files:
             # skip stranger.txt file
-            if bond_file == "stranger.txt":
+            if bond_file == "stranger.txt" or bond_file == "stranger_bad.txt":
                 continue
 
             parts = bond_file[:-4].split("_")
@@ -89,10 +102,16 @@ class BondsHandler:
         # check stranger.txt exists
         if not path.exists(path.join(self.bonds_folder, "stranger.txt")):
             raise ValueError("Missing 'stranger.txt' file in bonds folder")
+        
+        if not path.exists(path.join(self.bonds_folder, "stranger_bad.txt")):
+            raise ValueError("Missing 'stranger_bad.txt' file in bonds folder")
 
         with open(path.join(self.bonds_folder, "stranger.txt"), "r", encoding="utf-8") as f:
             self.stranger_bond = f.read().strip()
 
+        with open(path.join(self.bonds_folder, "stranger_bad.txt"), "r", encoding="utf-8") as f:
+            self.stranger_bad_bond = f.read().strip()
+        
     def check_against_status(self, states: list[str]) -> bool:
         # this is for checking, we need to check that every status is indicated in each bond file as a line stating <status>: value
         # add "*" to states to indicate general instructions
@@ -110,6 +129,13 @@ class BondsHandler:
         for state in states:
             if not any(line.startswith(f"{state}:") for line in bond_text_line_splits):
                 raise ValueError(f"State '{state}' not found in stranger bond")
+            
+        # also check stranger bad bond
+        bond_text = self.stranger_bad_bond
+        bond_text_line_splits = bond_text.splitlines()
+        for state in states:
+            if not any(line.startswith(f"{state}:") for line in bond_text_line_splits):
+                raise ValueError(f"State '{state}' not found in stranger bad bond")
 
     def apply_names(self, character_name: str, username: str):
         self.character_name = character_name
@@ -127,6 +153,12 @@ class BondsHandler:
             text = text.replace("{{char}}", character_name)
             text = text.replace("{{user}}", username)
             self.stranger_bond = text
+
+        for key in self.stranger_bad_bond:
+            text = self.stranger_bad_bond
+            text = text.replace("{{char}}", character_name)
+            text = text.replace("{{user}}", username)
+            self.stranger_bad_bond = text
 
         # now we can process the bonrds further, each bondfile has text separated by lines
         self.processed_bonds = {}
@@ -147,14 +179,30 @@ class BondsHandler:
                 state, value = line.split(":", 1)
                 self.processed_stranger_bond[state.strip()] = value.strip()
 
+        self.processed_stranger_bad_bond = {}
+        stranger_bad_lines = self.stranger_bad_bond.splitlines()
+        for line in stranger_bad_lines:
+            if ":" in line:
+                state, value = line.split(":", 1)
+                self.processed_stranger_bad_bond[state.strip()] = value.strip()
+
     def get_instructions_for_bond(self, bond_value: int, applying_states: list[list[str, int]], stranger_bond: bool) -> dict[str, str]:
         """Get the bond instructions for the given bond value"""
         processed_bond = None
         if stranger_bond:
-            processed_bond = self.processed_stranger_bond
+            if bond_value < 0:
+                processed_bond = self.processed_stranger_bad_bond
+            else:
+                processed_bond = self.processed_stranger_bond
         else:
             for min_bond, max_bond in self.processed_bonds:
                 if bond_value >= min_bond and bond_value < max_bond:
+                    processed_bond = self.processed_bonds[(min_bond, max_bond)]
+                    break
+
+        if bond_value >= 100:
+            for min_bond, max_bond in self.processed_bonds:
+                if max_bond == 100:
                     processed_bond = self.processed_bonds[(min_bond, max_bond)]
                     break
 
@@ -178,9 +226,18 @@ class BondsHandler:
                 for level, label in intensity_labels:
                     if intensity >= level:
                         intensity_label = label
-                all_instructions += "\n" + self.character_name + " is currently " + intensity_label + state + ", " + processed_bond[state]
+                state_wordified = state.replace("_", " ").lower()
+                # capitalize first letter
+                state_wordified = state_wordified[0].upper() + state_wordified[1:]
 
-        return all_instructions + "\n" + self.get_system_instructions()
+                is_added = " is "
+                first_word = state_wordified.split(" ")[0].lower()
+                # check if is is required, check if it ends in s
+                if first_word[-1] == "s":
+                    is_added = " "
+                all_instructions += "\n" + self.character_name + is_added + "currently " + intensity_label + state_wordified + ", " + processed_bond[state] + ", to remove this state add the tag " + state.upper() + "_DECREASE at the end of the message."
+
+        return all_instructions + f"\nkeep the answer at most two paragraphs long and do not predict {self.username} nor his reactions, roleplay as {self.character_name} only."
         
     def calculate_bond_change(self, current_bond: float, current_stranger: bool, total_messages_exchanged: int, change: Literal["pos", "neg", "neutral"]) -> float:
         next_bond_amount = current_bond
@@ -189,7 +246,7 @@ class BondsHandler:
             if next_bond_amount > 100:
                 next_bond_amount = 100
         elif change == "neg":
-            next_bond_amount -= self.bond_climb_rate
+            next_bond_amount -= self.bond_climb_rate*(self.bond_stranger_negative_bias_multiplier if current_stranger else self.bond_negative_bias_multiplier)
             if next_bond_amount < -100:
                 next_bond_amount = -100
         else:
@@ -197,24 +254,25 @@ class BondsHandler:
 
         next_stranger = current_stranger
         if current_stranger:
-            if next_bond_amount >= self.bond_stranger_breakaway:
-                next_bond_amount = next_bond_amount * self.bond_stranger_breakaway_reset_multiplier
+            if abs(next_bond_amount) >= self.bond_stranger_breakaway:
+                next_bond_amount = next_bond_amount * (self.bond_stranger_breakaway_reset_negative_multiplier if next_bond_amount < 0 else self.bond_stranger_breakaway_reset_multiplier)
                 next_stranger = False
             elif total_messages_exchanged >= self.bond_stranger_messages_breakaway:
-                next_bond_amount = next_bond_amount * self.bond_stranger_messages_breakaway_multiplier
+                next_bond_amount = next_bond_amount * (self.bond_stranger_messages_breakaway_negative_multiplier if next_bond_amount < 0 else self.bond_stranger_messages_breakaway_multiplier)
                 next_stranger = False
 
         return next_bond_amount, next_stranger
     
     def get_system_instructions(self) -> str:
-        return "By the end of the reply one of these should be included: [[INTERACTION_POSITIVE]], [[INTERACTION_NEGATIVE]], or [[INTERACTION_NEUTRAL]]; this specifies whether the interaction was positive, negative or neutral and grows or shrinks the bond accordingly."
+        return f"You MUST include one of these at the end of the reply:\nINTERACTION_POSITIVE\nINTERACTION_NEGATIVE\nINTERACTION_NEUTRAL\n\nThis specifies whether the interaction was positive, negative or neutral and grows or shrinks the bond accordingly"
     
     def calculate_bond_change_from_message(self, current_bond: float, current_stranger: bool, total_messages_exchanged: int, message: str) -> tuple[float, bool]:
         """Find the INTERACTION_POSITIVE, INTERACTION_NEGATIVE, or INTERACTION_NEUTRAL tag in the message and calculate the bond change accordingly"""
         change = "neutral"
-        if "[[INTERACTION_POSITIVE]]" in message:
+        # just grab the text because of issues with the LLM sometimes not following instructions properly
+        if "INTERACTION_POSITIVE" in message:
             change = "pos"
-        elif "[[INTERACTION_NEGATIVE]]" in message:
+        elif "INTERACTION_NEGATIVE" in message:
             change = "neg"
 
         return self.calculate_bond_change(current_bond, current_stranger, total_messages_exchanged, change)

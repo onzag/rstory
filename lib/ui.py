@@ -4,6 +4,7 @@ from PySide6.QtWidgets import QMainWindow, QLabel, QVBoxLayout, QWidget
 from PySide6.QtCore import QThread, Signal, Slot
 import os
 import signal
+import traceback
 
 def format_content(content):
     """Format content for display in QLabel (supports basic HTML)"""
@@ -43,7 +44,7 @@ def reformat_content(content):
 class PrepareLLMThread(QThread):
     """Thread for preparing LLM without blocking UI"""
     finished = Signal(object)  # Emits the LLM instance when ready
-    error = Signal(str)
+    error = Signal(str, str)  # Emit error message and traceback
     
     def __init__(self, prepare_function):
         super().__init__()
@@ -54,12 +55,13 @@ class PrepareLLMThread(QThread):
             llm = self.prepare_function()
             self.finished.emit(llm)
         except Exception as e:
-            self.error.emit(str(e))
+            tb = traceback.format_exc()
+            self.error.emit(str(e), tb)
 
 class RunInferenceThread(QThread):
     """Thread for running inference without blocking UI"""
     finished = Signal()
-    error = Signal(str)
+    error = Signal(str, str)  # Emit error message and traceback
     # Signals for UI updates from worker thread
     character_is_typing = Signal()
     add_character_text = Signal(str)
@@ -78,7 +80,8 @@ class RunInferenceThread(QThread):
             self.run_inference_function(self.llm, self.user_input, self.dangling_user_message)
             self.finished.emit()
         except Exception as e:
-            self.error.emit(str(e))
+            tb = traceback.format_exc()
+            self.error.emit(str(e), tb)
 
 class UserInputEventFilter(QtCore.QObject):
     """Event filter to capture Enter key presses in QTextEdit"""
@@ -322,6 +325,7 @@ class ChatMessage:
 class ChatWindow(QMainWindow):
     def __init__(self, character_name, initial_chat_history, username):
         super().__init__()
+        self.errored = False
         self.character_name = character_name
         self.setWindowTitle("Chat with " + character_name)
         self.setGeometry(100, 100, 1200, 600)
@@ -493,10 +497,13 @@ class ChatWindow(QMainWindow):
         else:
             self.unblock_chat()
 
-    @Slot(str)
-    def _on_llm_error(self, error_msg):
+    @Slot(str, str)
+    def _on_llm_error(self, error_msg, traceback_str):
         """Called if LLM preparation fails"""
         self.update_status(error_msg, "Error")
+        print(traceback_str)
+        # block chat for now
+        self.block_chat()
 
     def run_inference(self, user_input, dangling_user_message):
         if self.ended:
@@ -555,15 +562,17 @@ class ChatWindow(QMainWindow):
     @Slot()
     def _on_inference_finished(self):
         """Called when inference is finished"""
-        if not self.ended:
+        if not self.ended and not self.errored:
             self.unblock_chat()
             # focus the user input box
             self.user_input.setFocus()
 
-    @Slot(str)
-    def _on_inference_error(self, error_msg):
+    @Slot(str, str)
+    def _on_inference_error(self, error_msg, traceback_str):
         """Called if inference fails"""
         self.update_status(error_msg, "Error")
+        self.errored = True
+        print(traceback_str)
         # block chat for now
         self.block_chat()
 

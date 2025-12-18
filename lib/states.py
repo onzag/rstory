@@ -108,7 +108,7 @@ class StatesHandler:
             applied_end_states.append((state, description))
         self.end_states = applied_end_states
     
-    def get_next_applying_states(self, current_applying_states: list[list[str, int]], llm_given_states_add: list[str], llm_given_states_reduce: list[str]) -> list[list[str, int]]:
+    def get_next_applying_states(self, current_applying_states: list[list[str, int]], llm_given_states_add: list[str], llm_given_states_reduce: list[str], llm_state_to_add_if_not_present: list[str]) -> list[list[str, int]]:
         """Get a list of states that are currently applying based on their durations"""
         random_states = self.get_random_applied_states()
         new_applying_states = []
@@ -120,43 +120,49 @@ class StatesHandler:
                 if intensity > 4:
                     intensity = 4  # cap intensity at 4
             if state in llm_given_states_reduce:
-                intensity -= 1  # decrease intensity if state is reduced
-                if intensity < 0:
-                    intensity = 0  # cap intensity at 0
+                intensity = 0  # remove state if told to reduce
+                # this is because the LLM may get caught in a loop of increasing and decreasing the same state
             if intensity > 0:
                 new_applying_states.append([state, intensity])
         # now let's add possibly new states from llm_given_states_add and random_states
         for state in llm_given_states_add + random_states:
             if state not in [s[0] for s in new_applying_states]:
                 new_applying_states.append([state, 1])  # add new state with intensity 1
+        for state_to_add_if_not_present in llm_state_to_add_if_not_present:
+            if state_to_add_if_not_present not in [s[0] for s in new_applying_states] and state_to_add_if_not_present not in llm_given_states_reduce:
+                new_applying_states.append([state_to_add_if_not_present, 1])  # add new state with intensity 1
         return new_applying_states
     
     def get_system_instructions(self, character_name):
         common_states = list(self.common_states.keys())
-        common_states_increase_tags = "\n".join([f"[[{state}_INCREASE]]" for state in common_states])
-        common_states_decrease_tags = "\n".join([f"[[{state}_DECREASE]]" for state in common_states])
+        common_states_increase_tags = "\n".join([f"{state}_INCREASE" for state in common_states])
+        common_states_decrease_tags = "\n".join([f"{state}_DECREASE" for state in common_states])
         normal_states = list(self.states.keys())
-        normal_states_increase_tags = "\n".join([f"[[{state}_INCREASE]]" for state in normal_states])
-        normal_states_decrease_tags = "\n".join([f"[[{state}_DECREASE]]" for state in normal_states])
-        basic_prompt = f"While providing responses, add state tags to help indicate the character's current emotional and mental states; {character_name}" + \
-               " very commonly falls into certain states, described by the tags:\n" + common_states_increase_tags + "\nwhich can be decreased by specifying:\n" + common_states_decrease_tags + \
-                "\n\nAdditionally, consider other states that may apply, described by the tags:\n" + normal_states_increase_tags + "\nand decrease by specifying:\n" + normal_states_decrease_tags + \
-                "\nUse these tags to reflect changes in the character's emotional and mental states throughout the conversation."
-        end_prompt = f"If something catastrophic happens in the story, an end tag may be required to indicate a significant effect, the following end tags may be used when appropriate:\n" + \
-            "\n".join([f"[[{state}]]: {description}" for state, description in self.end_states]) + \
-            "\nUse these tags only when the story context justifies their application."
+        normal_states_increase_tags = "\n".join([f"{state}_INCREASE" for state in normal_states])
+        normal_states_decrease_tags = "\n".join([f"{state}_DECREASE" for state in normal_states])
+        basic_prompt = f"\nYou MUST add one or many state tags at the end of every response" + \
+               "\n\nThe most common tags to use are:\n" + common_states_increase_tags + "\n\nWhich can be decreased by specifying:\n" + common_states_decrease_tags + \
+                "\n\nAlso use the tags:\n" + normal_states_increase_tags + "\n\nAnd decrease by specifying:\n" + normal_states_decrease_tags + \
+                "\n\nYou MUST use these tags to reflect changes in the character's emotional and mental state by the end of the conversation."
+        end_prompt = f"You MUST use one of these tags only if something catastrophic happens:\n" + \
+            "\n".join([f"{state}: {description}" for state, description in self.end_states]) + \
+            "\nYou MUST use these tags only when the story context justifies their application."
         return basic_prompt + "\n\n" + end_prompt
     
     def get_next_applying_states_from_llm_response(self, current_applying_states: list[list[str, int]], llm_response: str) -> list[list[str, int]]:
         """Get the next applying states based on the LLM response"""
         llm_given_states_add = []
         llm_given_states_reduce = []
+        llm_state_to_add_if_not_present = []
         for state in self.get_all_states():
-            if f"[[{state}_INCREASE]]" in llm_response:
+            # use simple tags because the LLM may not follow instructions properly
+            if f"{state}_INCREASE" in llm_response:
                 llm_given_states_add.append(state)
-            if f"[[{state}_DECREASE]]" in llm_response:
+            if f"{state}_DECREASE" in llm_response:
                 llm_given_states_reduce.append(state)
-        return self.get_next_applying_states(current_applying_states, llm_given_states_add, llm_given_states_reduce)
+            if state in llm_response:
+                llm_state_to_add_if_not_present.append(state)
+        return self.get_next_applying_states(current_applying_states, llm_given_states_add, llm_given_states_reduce, llm_state_to_add_if_not_present)
     
     def llm_response_has_end_state(self, llm_response: str) -> tuple[bool, str]:
         """Check if the LLM response contains an end state tag, and return the state if found"""

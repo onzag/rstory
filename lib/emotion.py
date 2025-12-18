@@ -84,8 +84,10 @@ class EmotionHandler:
         
     def get_system_instructions(self, character_name: str) -> str:
         """Get system instructions regarding emotions for the character"""
-        common_emotion_tags = "\n".join("[[{}]]".format(em) for em in self.common_emotions)
-        remaining_emotion_tags = "\n".join("[[{}]]".format(em) for em in self.emotions)
-        instructions = f"While providing responses as {character_name}, always express emotions appropriately. "
-        instructions += f"\n{character_name} very often falls into the following emotion tags:\n{common_emotion_tags}\n\nAdditionally consider other emotion tags:\n{remaining_emotion_tags}"
+        common_emotion_tags = "\n".join(f":{em}:" for em in self.common_emotions)
+        remaining_emotion_tags = "\n".join(f":{em}:" for em in self.emotions)
+        instructions = f"\nCRITICAL FORMATTING RULE:\n"
+        instructions += f"\nYou MUST include emotion tags in the response, e.g., :happy: or :sad: in each paragraph\n"
+        instructions += f"\nMost commonly use these tags:\n{common_emotion_tags}\n\nAdditionally consider tags:\n{remaining_emotion_tags}"
+        instructions += f"\nYou MUST use at least one emotion tag per paragraph to indicate the character's current emotional state.\n"
         return instructions

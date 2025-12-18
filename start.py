@@ -91,81 +91,106 @@ with open(character_system_description_path, "r", encoding="utf-8") as f:
     SYSTEM_PROMPT = f.read().strip()
 SYSTEM_PROMPT_EMOTIONS = None
 SYSTEM_PROMPT_STATES = None
+SYSTEM_PROMPT_BONDS = None
 
+CACHE_TOKENS = {}
 def count_tokens(text, llm_instance):
     """Estimate token count for a given text"""
-    return len(llm_instance.tokenize(text.encode('utf-8')))
+    global CACHE_TOKENS
+    if text in CACHE_TOKENS:
+        CACHE_TOKENS[text]["used_in_last_count"] = True
+        return CACHE_TOKENS[text]["value"]
+    
+    if llm_instance is None:
+        # rough estimate: 1 token per 4 characters, used for debugging without LLM
+        return len(text) // 4
+    token_count = len(llm_instance.tokenize(text.encode('utf-8')))
+    CACHE_TOKENS[text] = {"value": token_count, "used_in_last_count": True}
+    return token_count
 
-def format_prompt(history, user_message, llm_instance=None, max_context=6000, special_instructions=None):
+def clean_token_cache():
+    # Remove entries not used in the last count
+    global CACHE_TOKENS
+    keys_to_remove = [key for key, value in CACHE_TOKENS.items() if not value["used_in_last_count"]]
+    for key in keys_to_remove:
+        del CACHE_TOKENS[key]
+
+def prepare_token_cache():
+    # Mark all entries as not used
+    global CACHE_TOKENS
+    for key in CACHE_TOKENS:
+        CACHE_TOKENS[key]["used_in_last_count"] = False
+
+def format_prompt(history, llm_instance=None, max_context=6000, special_instructions=""):
     """Format the conversation history with proper role tags for Llama 3.3
     Uses sliding window to keep only recent messages that fit in context.
     Reserves space for system prompt, new message, and response generation.
     """
+    prepare_token_cache()
+
     # Start with system prompt
-    combined_system_prompt = SYSTEM_PROMPT + "\n" + SYSTEM_PROMPT_EMOTIONS + "\n" + SYSTEM_PROMPT_STATES
+    combined_system_prompt = SYSTEM_PROMPT + "\n" + SYSTEM_PROMPT_EMOTIONS + "\n" + SYSTEM_PROMPT_STATES + "\n" + SYSTEM_PROMPT_BONDS
     system_part = f"<|start_header_id|>system<|end_header_id|>\n\n{combined_system_prompt}<|eot_id|>"
+
+    end_prompt = "<|start_header_id|>assistant<|end_header_id|>\n\n"
     
     # Format the new user message
-    user_part = ""
-    if user_message is not None:
-        user_part = f"<|start_header_id|>user<|end_header_id|>\n\n{user_message}<|eot_id|>"
-        if not special_instructions:
-            user_part += "<|start_header_id|>assistant<|end_header_id|>\n\n"
-
     if special_instructions:
-        special_instructions = f"\n\n<|start_header_id|>system<|end_header_id|>\n\n{special_instructions}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n"
+        special_instructions = f"<|start_header_id|>user<|end_header_id|>\n\n*{special_instructions}*<|eot_id|>"
+
+    # TODO delete repetitive states, or delete them altogether from history?
+    # TODO figure why emotions are still not working well with Llama 3.3
     
     # Count tokens for system and user parts (reserve space)
-    if llm_instance:
-        system_tokens = count_tokens(system_part, llm_instance)
-        special_instructions_tokens = 0
-        if special_instructions:
-            special_instructions_tokens = count_tokens(special_instructions, llm_instance)
-        user_tokens = count_tokens(user_part, llm_instance)
-        available_tokens = max_context - system_tokens - special_instructions_tokens - user_tokens
+    system_tokens = count_tokens(system_part, llm_instance)
+    special_instructions_tokens = 0
+    if special_instructions:
+        special_instructions_tokens = count_tokens(special_instructions, llm_instance)
+    end_prompt_tokens = count_tokens(end_prompt, llm_instance)
+    available_tokens = max_context - system_tokens - special_instructions_tokens - end_prompt_tokens
         
-        # Build history from most recent messages backwards
-        history_parts = []
-        token_count = 0
+    # Build history from most recent messages backwards
+    history_parts = []
+    token_count = 0
         
-        # Iterate through history in reverse to keep most recent messages
-        for msg in reversed(history):
-            role = msg["role"]
-            content = msg["content"]
-            if role == "user":
-                msg_text = f"<|start_header_id|>user<|end_header_id|>\n\n{content}<|eot_id|>"
-            elif role == "assistant":
-                msg_text = f"<|start_header_id|>assistant<|end_header_id|>\n\n{content}<|eot_id|>"
-            else:
-                #internal role, skip
-                continue
+    # Iterate through history in reverse to keep most recent messages
+    for msg in reversed(history):
+        role = msg["role"]
+        content = msg["content"]
+        if role == "user":
+            msg_text = f"<|start_header_id|>user<|end_header_id|>\n\n{content}<|eot_id|>"
+        elif role == "assistant":
+            msg_text = f"<|start_header_id|>assistant<|end_header_id|>\n\n{content}<|eot_id|>"
+        else:
+            #internal role, skip
+            continue
             
-            msg_tokens = count_tokens(msg_text, llm_instance)
+        msg_tokens = count_tokens(msg_text, llm_instance)
             
-            # Check if adding this message would exceed available tokens
-            if token_count + msg_tokens > available_tokens:
-                break
+        # Check if adding this message would exceed available tokens
+        if token_count + msg_tokens > available_tokens:
+            break
             
-            history_parts.insert(0, msg_text)  # Insert at beginning to maintain order
-            token_count += msg_tokens
+        history_parts.insert(0, msg_text)  # Insert at beginning to maintain order
+        token_count += msg_tokens
 
-        # Combine all parts
-        prompt = system_part + "".join(history_parts) + user_part + (special_instructions if special_instructions else "")
+    # wedge special instructions one before history
+    if special_instructions:
+        history_parts.insert(len(history_parts) - 1, special_instructions)
+        token_count += special_instructions_tokens
+
+    token_count += system_tokens
+
+    # Combine all parts
+    prompt = system_part + "".join(history_parts) + end_prompt
+
+    print(prompt)
         
-        # Log token usage
-        #total_tokens = system_tokens + token_count + user_tokens
-        print(f"[Token usage: {token_count}/{max_context}, kept {len(history_parts)} history messages]", flush=True)
-    else:
-        # Fallback without token counting (shouldn't happen in practice)
-        prompt = system_part
-        for msg in history:
-            role = msg["role"]
-            content = msg["content"]
-            if role == "user":
-                prompt += f"<|start_header_id|>user<|end_header_id|>\n\n{content}<|eot_id|>"
-            elif role == "assistant":
-                prompt += f"<|start_header_id|>assistant<|end_header_id|>\n\n{content}<|eot_id|>"
-        prompt += user_part
+    # Log token usage
+    #total_tokens = system_tokens + token_count + user_tokens
+    print(f"[Token usage: {token_count}/{max_context}, kept {len(history_parts)} history messages]", flush=True)
+
+    clean_token_cache()
     
     return prompt
 
@@ -195,8 +220,10 @@ def prepare_llm():
 
     global SYSTEM_PROMPT_EMOTIONS
     global SYSTEM_PROMPT_STATES
+    global SYSTEM_PROMPT_BONDS
     SYSTEM_PROMPT_EMOTIONS = emotion_handler.get_system_instructions(character_name_value)
     SYSTEM_PROMPT_STATES = states_handler.get_system_instructions(character_name_value)
+    SYSTEM_PROMPT_BONDS = bonds_handler.get_system_instructions()
 
     chat_window.update_status("Loading model...")
 
@@ -243,7 +270,6 @@ def run_inference(llm: Llama, user_input, dangling_user_message):
     # Format the prompt with history
     prompt = format_prompt(
         chat_history,
-        None if dangling_user_message else user_input,
         llm_instance=llm,
         max_context=8192 - 512,
         special_instructions=system_prompt_for_end
