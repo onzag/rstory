@@ -156,7 +156,7 @@ def prepare_llm():
 
     return llm
 
-def run_inference(llm, user_input, dangling_user_message):
+def run_inference(llm: Llama, user_input, dangling_user_message):
     if not user_input:
         return  # skip empty input
 
@@ -177,16 +177,39 @@ def run_inference(llm, user_input, dangling_user_message):
     # Generate response
     chat_window.character_is_typing()
     response = ""
-    for token in llm(prompt, max_tokens=8192, stream=True, stop=["<|eot_id|>", "<|start_header_id|>"]):
+    for token in llm(
+        prompt, 
+        max_tokens=8192, 
+        stream=True, 
+        stop=["<|eot_id|>", "<|start_header_id|>"],
+        repeat_penalty=1.1,           # Penalize repetitions (1.0 = no penalty, higher = more penalty)
+        frequency_penalty=0.5,        # Reduce likelihood of frequently used tokens
+        presence_penalty=0.5,          # Encourage new topics/ideas
+        temperature=1,              # Creativity of responses
+        top_p=0.9,                   # Nucleus sampling
+    ):
         text = token["choices"][0]["text"]
         chat_window.add_character_text(text)
         response += text
         
-        chat_history.append({"role": "assistant", "content": response.strip()})
+    chat_history.append({"role": "assistant", "content": response.strip()})
+    save_conversation_log()
+
+    chat_window.update_status("Ready for next message.")
+    chat_window.character_finished_typing()
+
+def edit_message(index, new_content):
+    """Edit a message in the chat history and save the log"""
+    if 0 <= index < len(chat_history):
+        chat_history[index]["content"] = new_content
         save_conversation_log()
 
-        chat_window.update_status("Ready for next message.")
+def delete_message(index):
+    """Delete a message from the chat history and save the log"""
+    if 0 <= index < len(chat_history):
+        del chat_history[index]
+        save_conversation_log()
 
 # Start the chat
-chat_window.run(prepare_llm, run_inference)
+chat_window.run(prepare_llm, run_inference, edit_message, delete_message)
 app.exec()
