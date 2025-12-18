@@ -1,5 +1,5 @@
 # we will now use pyside for the UI
-from PySide6 import QtWidgets, QtCore
+from PySide6 import QtWidgets, QtCore, QtGui
 from PySide6.QtWidgets import QMainWindow, QLabel, QVBoxLayout, QWidget
 from PySide6.QtCore import QThread, Signal, Slot
 import os
@@ -63,7 +63,7 @@ class RunInferenceThread(QThread):
     # Signals for UI updates from worker thread
     character_is_typing = Signal()
     add_character_text = Signal(str)
-    character_finished_typing = Signal()
+    character_finished_typing = Signal(str)
     
     def __init__(self, run_inference_function, llm, user_input, dangling_user_message, chat_window):
         super().__init__()
@@ -90,9 +90,237 @@ class UserInputEventFilter(QtCore.QObject):
                 self.enter_pressed.emit()
                 return True  # Event handled
         return super().eventFilter(obj, event)
+    
+class ChatMessage:
+    def __init__(
+            self,
+            parent,
+            role,
+            content,
+            uninitialized=False,
+            scroll_to_bottom=True,
+        ):
+        self.parent = parent
+        self.label = QLabel()
+        if role == "user":
+            self.label.setStyleSheet("background-color: #D1E7DD; padding: 5px; border-radius: 5px;")
+        elif role == "assistant":
+            if uninitialized:
+                self.label.setStyleSheet("background-color: #F8D7DA; padding: 5px; border-radius: 5px; border: 2px dashed #6c757d;")
+            else:
+                self.label.setStyleSheet("background-color: #F8D7DA; padding: 5px; border-radius: 5px;")
+        else:
+            self.label.setStyleSheet("background-color: #E2E3E5; padding: 5px; border-radius: 5px;")
+
+        if role == "user" or role == "assistant":
+            self.label.setTextFormat(QtCore.Qt.RichText)
+            self.label.setText(format_content(content))
+        else:
+            self.label.setTextFormat(QtCore.Qt.PlainText)
+            self.label.setText(content)
+
+        if not uninitialized:
+            self.label.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
+
+        # change the cursor to one for selecting text
+        self.label.setCursor(QtCore.Qt.IBeamCursor)
+
+        # add metadata to the label for role
+        self.role = role
+        self.editing = False
+        self.index = len(parent.messages)
+        self.plain_text = content
+        self.uninitialized = uninitialized
+
+        # add a context menu to copy text
+        self.label.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
+        if not uninitialized:
+            self.label.customContextMenuRequested.connect(self._show_context_menu)
+        
+        self.label.setWordWrap(True)
+
+        # add the label to the chat history layout before the stretch
+        layout = parent.chat_history_container.widget().layout()
+        layout.insertWidget(layout.count() - 1, self.label)
+        
+        # scroll to bottom
+        if scroll_to_bottom:
+            QtCore.QTimer.singleShot(100, self.parent._scroll_to_bottom)
+
+        parent.messages.append(self)
+
+    def reinsert_into_layout(self, layout):
+        layout.insertWidget(layout.count() - 1, self.label)
+
+    def unmark_uninitialized(self):
+        if self.uninitialized:
+            self.uninitialized = False
+
+            self.label.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
+            self.label.customContextMenuRequested.connect(self._show_context_menu)
+
+            # remove the dashed border
+            if self.role == "assistant":
+                self.label.setStyleSheet("background-color: #F8D7DA; padding: 5px; border-radius: 5px;")
+
+    def is_uninitialized(self):
+        return self.uninitialized
+    
+    def setText(self, text):
+        self.plain_text = text
+        self.label.setText(format_content(text))
+
+    def reIndex(self, new_index):
+        self.index = new_index
+
+    def start_edit_mode(self):
+        """Switch the message to edit mode"""
+        if not self.editing:
+            self.editing = True
+
+            # replace the label with a QTextEdit
+            self.text_edit = QtWidgets.QTextEdit()
+            self.text_edit.setPlainText(self.plain_text)
+            self.text_edit.setStyleSheet("background-color: #fff3cd; padding: 5px; border-radius: 5px;")
+            
+            # Make it grow with content - no scrollbars
+            self.text_edit.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
+            self.text_edit.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
+            self.text_edit.setSizeAdjustPolicy(QtWidgets.QAbstractScrollArea.AdjustToContents)
+            
+            # Calculate height based on document
+            doc_height = self.text_edit.document().size().height()
+            self.text_edit.setMinimumHeight(int(doc_height) + 20)
+            
+            # Update height when content changes
+            self.text_edit.textChanged.connect(self._update_text_edit_height)
+
+            # trigger _update_text_edit_height to set initial height after some time because it is not doing so
+            # add scroll to bottom after layout is updated
+            QtCore.QTimer.singleShot(100, lambda: self._update_text_edit_height(scroll_to_bottom=True))
+
+            # set the custom context menu
+            self.text_edit.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
+            self.text_edit.customContextMenuRequested.connect(self._show_context_menu)
+            
+            layout = self.parent.chat_history_container.widget().layout()
+            layout.replaceWidget(self.label, self.text_edit)
+            self.label.hide()
+            self.text_edit.show()
+
+            # focus the text edit
+            self.text_edit.setFocus()
+    
+    def _update_text_edit_height(self, scroll_to_bottom=False):
+        """Update text edit height based on content"""
+        if hasattr(self, 'text_edit') and self.text_edit:
+            doc_height = self.text_edit.document().size().height()
+            self.text_edit.setMinimumHeight(int(doc_height) + 20)
+
+            if scroll_to_bottom:
+                # Move cursor to end and keep focus
+                cursor = self.text_edit.textCursor()
+                cursor.movePosition(QtGui.QTextCursor.End)
+                self.text_edit.setTextCursor(cursor)
+                self.text_edit.setFocus()
+                
+                # Scroll to show the entire text edit, focusing on the bottom
+                # Use negative yMargin to ensure bottom is visible
+                QtCore.QTimer.singleShot(50, lambda: self.parent.chat_history_container.ensureWidgetVisible(
+                    self.text_edit, 0, 100
+                ))
+
+    def cancel_edit_mode(self):
+        """Cancel edit mode and revert to original text"""
+        if self.editing:
+            self.editing = False
+
+            # replace the QTextEdit with the label
+            layout = self.parent.chat_history_container.widget().layout()
+            layout.replaceWidget(self.text_edit, self.label)
+            self.text_edit.hide()
+            self.label.show()
+
+            # delete the text edit
+            self.text_edit.deleteLater()
+            self.text_edit = None
+
+    def finish_edit_mode(self):
+        """Finish edit mode and save changes"""
+        if self.editing:
+            new_text = self.text_edit.toPlainText()
+            self.setText(format_content(new_text))
+
+            self.editing = False
+
+            # replace the QTextEdit with the label
+            layout = self.parent.chat_history_container.widget().layout()
+            layout.replaceWidget(self.text_edit, self.label)
+            self.text_edit.hide()
+            self.label.show()
+
+            # delete the text edit
+            self.text_edit.deleteLater()
+            self.text_edit = None
+                        
+            self.parent.on_message_edited(self.index, new_text)
+
+    def _show_context_menu(self, position):
+        """Show context menu for copying text"""
+        widget = self.label if not self.editing else self.text_edit
+        
+        menu = QtWidgets.QMenu()
+        copy_action = menu.addAction("Copy")
+
+        edit_action = None
+        save_action = None
+        delete_action = None
+        cancel_action = None
+        
+        if self.role in ["user", "assistant"]:
+            if not self.editing:
+                edit_action = menu.addAction("Edit")
+                delete_action = menu.addAction("Delete")
+            else:
+                save_action = menu.addAction("Save")
+                cancel_action = menu.addAction("Cancel")
+        
+        # Show menu at the widget's position
+        action = menu.exec(widget.mapToGlobal(position))
+        
+        if action == copy_action:
+            clipboard = QtWidgets.QApplication.clipboard()
+            # copy the selected text if any, else copy all text
+            if self.editing:
+                # in edit mode it is already plain text
+                if self.text_edit.textCursor().hasSelection():
+                    clipboard.setText(self.text_edit.textCursor().selectedText())
+                else:
+                    clipboard.setText(self.text_edit.toPlainText())
+            else:
+                if self.label.hasSelectedText():
+                    clipboard.setText(reformat_content(self.label.selectedText()))
+                else:
+                    clipboard.setText(self.plain_text)
+        elif action == edit_action and edit_action is not None:
+            # get the message object for that index
+            message_obj = self
+            # change the message to edit mode
+            # call the method on the main thread somehow
+            message_obj.start_edit_mode()
+        elif action == save_action and save_action is not None:
+            # get the message object for that index
+            message_obj = self.parent.messages[self.index]
+            message_obj.finish_edit_mode()
+        elif action == cancel_action and cancel_action is not None:
+            # get the message object for that index
+            self.cancel_edit_mode()
+        elif action == delete_action and delete_action is not None:
+            self.parent.on_message_deleted(self.index)
+            self.label.deleteLater()
 
 class ChatWindow(QMainWindow):
-    def __init__(self, character_name, initial_chat_history):
+    def __init__(self, character_name, initial_chat_history, username):
         super().__init__()
         self.character_name = character_name
         self.setWindowTitle("Chat with " + character_name)
@@ -101,6 +329,9 @@ class ChatWindow(QMainWindow):
         # add a central widget
         self.central_widget = QWidget()
         self.setCentralWidget(self.central_widget)
+
+        self.messages = []
+        self.username = username
 
         # add a status label
         self.status_label = QLabel("Status: Ready", self)
@@ -154,9 +385,9 @@ class ChatWindow(QMainWindow):
         chat_content_layout.addStretch()
 
         # Add initial chat history to the layout
-        for i, msg in enumerate(initial_chat_history):
+        for msg in initial_chat_history:
             content = msg["content"]
-            self._add_message_label(msg["role"], content, i)
+            self._add_message_label(msg["role"], content)
         
         # Scroll to bottom after UI is fully rendered (use longer delay to ensure layout is complete)
         QtCore.QTimer.singleShot(100, self._scroll_to_bottom)
@@ -169,125 +400,30 @@ class ChatWindow(QMainWindow):
             self,
             role,
             content,
-            index,
             scroll_to_bottom=False,
-            no_edit=False,
-            no_select=False
+            uninitialized=False,
         ):
-        """Helper method to add a message label to chat history"""
-        label = QLabel()
-        if role == "user":
-            label.setStyleSheet("background-color: #D1E7DD; padding: 5px; border-radius: 5px;")
-        elif role == "assistant":
-            label.setStyleSheet("background-color: #F8D7DA; padding: 5px; border-radius: 5px;")
-        else:
-            label.setStyleSheet("background-color: #E2E3E5; padding: 5px; border-radius: 5px;")
+        message = ChatMessage(
+            parent=self,
+            role=role,
+            content=content,
+            uninitialized=uninitialized,
+            scroll_to_bottom=scroll_to_bottom,
+        )
 
-        if role == "user" or role == "assistant":
-            label.setTextFormat(QtCore.Qt.RichText)
-            label.setText(format_content(content))
-        else:
-            label.setTextFormat(QtCore.Qt.PlainText)
-            label.setText(content)
-
-        if not no_select:
-            label.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
-
-        # change the cursor to one for selecting text
-        label.setCursor(QtCore.Qt.IBeamCursor)
-
-        # add metadata to the label for role
-        label.setProperty("role", role)
-        label.setProperty("editing", False)
-        label.setProperty("index", index)
-
-        # add a context menu to copy text
-        label.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
-        if not no_edit:
-            label.customContextMenuRequested.connect(self._show_context_menu)
-        
-        label.setWordWrap(True)
-
-        # add the label to the chat history layout before the stretch
-        layout = self.chat_history_container.widget().layout()
-        layout.insertWidget(layout.count() - 1, label)
-
-        # scroll to bottom
-        if scroll_to_bottom:
-            QtCore.QTimer.singleShot(100, self._scroll_to_bottom)
-
-        return label
+        return message
 
     def _on_user_input_enter(self):
         """Handle Enter key press in user input box"""
         user_text = self.user_input.toPlainText().strip()
         if user_text:
-            last_label = self.chat_history_container.widget().layout().itemAt(self.chat_history_container.widget().layout().count() - 2).widget()
-            new_index = last_label.property("index") + 1 if last_label else 0
-            self._add_message_label("user", user_text, new_index, scroll_to_bottom=True)
+            self._add_message_label("user", user_text, scroll_to_bottom=True)
             # clear the user input box
             self.user_input.clear()
 
             # run inference with the user input
             self.run_inference(user_text, False)
-
-    def _show_context_menu(self, position):
-        """Show context menu for copying text"""
-        sender = self.sender()
-        menu = QtWidgets.QMenu()
-        copy_action = menu.addAction("Copy")
-
-        edit_action = None
-        save_action = None
-        delete_action = None
-        if sender.property("role") in ["user", "assistant"]:
-            if sender.property("editing") == False:
-                edit_action = menu.addAction("Edit")
-                delete_action = menu.addAction("Delete")
-            else:
-                save_action = menu.addAction("Save")
-        action = menu.exec_(sender.mapToGlobal(position))
-        if action == copy_action:
-            clipboard = QtWidgets.QApplication.clipboard()
-            # copy the selected text if any, else copy all text
-            # we need to check if our sender is currently in edit mode
-            if sender.property("editing") == True:
-                # in edit mode it is already plain text
-                if sender.hasSelectedText():
-                    clipboard.setText(sender.selectedText())
-                else:
-                    clipboard.setText(sender.text())
-            else:
-                if sender.hasSelectedText():
-                    clipboard.setText(reformat_content(sender.selectedText()))
-                else:
-                    clipboard.setText(reformat_content(sender.text()))
-        elif action == edit_action and edit_action is not None:
-            # allow editing the label text
-            sender.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse | QtCore.Qt.TextEditorInteraction)
-            sender.setFocus()
-            # change the text to the reformatted content as plain text
-            sender.setText(reformat_content(sender.text()))
-            # make the sender color light yellow to indicate edit mode
-            sender.setStyleSheet("background-color: #FFF3CD; padding: 5px; border-radius: 5px;")
-            sender.setProperty("editing", True)
-        elif action == save_action and save_action is not None:
-            # disable editing the label text
-            sender.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
-            sender.setProperty("editing", False)
-            # change the text back to formatted content
-            plain_text = sender.text()
-            sender.setText(format_content(plain_text))
-            # restore the original color based on role
-            if sender.property("role") == "user":
-                sender.setStyleSheet("background-color: #D1E7DD; padding: 5px; border-radius: 5px;")
-            elif sender.property("role") == "assistant":
-                sender.setStyleSheet("background-color: #F8D7DA; padding: 5px; border-radius: 5px;")
-            self.on_message_edited(sender.property("index"), plain_text)
-        elif action == delete_action and delete_action is not None:
-            self.on_message_deleted(sender.property("index"))
-            sender.deleteLater()
-
+    
     def on_message_edited(self, index, new_content):
         self.edit_message_function(index, new_content)
 
@@ -304,10 +440,11 @@ class ChatWindow(QMainWindow):
             if 0 <= index < len(self.initial_chat_history):
                 del self.initial_chat_history[index]
 
-        # refresh indices of remaining messages
-        for i in range(index, len(self.initial_chat_history)):
-            label = self.chat_history_container.widget().layout().itemAt(i).widget()
-            label.setProperty("index", i)
+        # delete from messages list
+        del self.messages[index]
+        # re-index remaining messages
+        for i in range(index, len(self.messages)):
+            self.messages[i].reIndex(i)
 
     def _scroll_to_bottom(self):
         """Helper method to scroll chat history to bottom"""
@@ -362,6 +499,8 @@ class ChatWindow(QMainWindow):
         self.update_status(error_msg, "Error")
 
     def run_inference(self, user_input, dangling_user_message):
+        if self.ended:
+            return  # do not run inference if chat has ended
         # in the same manner as prepare_llm, run inference in another thread
         self.block_chat()
         self.inference_thread = RunInferenceThread(self.run_inference_function, self.llm, user_input, dangling_user_message, self)
@@ -379,52 +518,47 @@ class ChatWindow(QMainWindow):
     def _character_is_typing(self):
         """Slot called from worker thread - safe for UI updates"""
         # this basically means to add a new entry with empty text for the assistant
-        last_label = self.chat_history_container.widget().layout().itemAt(self.chat_history_container.widget().layout().count() - 2).widget()
-        new_index = last_label.property("index") + 1 if last_label else 0
-        new_label = self._add_message_label("assistant", "<i>" + self.character_name + " is answering...</i>", new_index, scroll_to_bottom=True, no_select=True, no_edit=True)
-        new_label.setProperty("uninitialized", True)
-        # add special border to indicate typing
-        new_label.setStyleSheet("background-color: #F8D7DA; padding: 5px; border-radius: 5px; border: 2px dashed #6c757d;")
+        self._add_message_label("assistant", "<i>" + self.character_name + " is answering...</i>", scroll_to_bottom=True, uninitialized=True)
     
     @Slot(str)
     def _add_character_text(self, text):
         """Slot called from worker thread - safe for UI updates"""
         # find the last label which should be from assistant
-        layout = self.chat_history_container.widget().layout()
-        last_label = layout.itemAt(layout.count() - 2).widget()
-        if last_label.property("role") == "assistant":
+        last_message = self.messages[-1]
+        if last_message.role == "assistant":
             # if it is uninitialized, replace the text whole
-            if last_label.property("uninitialized") == True:
-                last_label.setText(format_content(text))
-                last_label.setProperty("plain_text", text)
-                last_label.setProperty("uninitialized", False)
+            if last_message.is_uninitialized():
+                last_message.setText(text)
+                last_message.unmark_uninitialized()
             else:
                 # append text
-                current_text = last_label.property("plain_text")
+                current_text = last_message.plain_text
                 new_text = current_text + text
-                last_label.setProperty("plain_text", new_text)
-                last_label.setText(format_content(new_text))
+                last_message.setText(new_text)
 
         # scroll to bottom
         QtCore.QTimer.singleShot(100, self._scroll_to_bottom)
     
-    @Slot()
-    def _character_finished_typing(self):
+    @Slot(str)
+    def _character_finished_typing(self, ended=None):
         """Slot called from worker thread - safe for UI updates"""
         # find the last assistant label and enable selection and editing
-        layout = self.chat_history_container.widget().layout()
-        last_label = layout.itemAt(layout.count() - 2).widget()
-        if last_label.property("role") == "assistant":
-            last_label.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
-            last_label.customContextMenuRequested.connect(self._show_context_menu)
+        last_message = self.messages[-1]
+        if last_message.role == "assistant":
+            last_message.unmark_uninitialized()
 
-        # remove the dashed border
-        last_label.setStyleSheet("background-color: #F8D7DA; padding: 5px; border-radius: 5px;")
+        if ended is not None:
+            self.ended = ended
+            self.update_status("Chat has ended: " + ended)
+            self.block_chat()
 
     @Slot()
     def _on_inference_finished(self):
         """Called when inference is finished"""
-        self.unblock_chat()
+        if not self.ended:
+            self.unblock_chat()
+            # focus the user input box
+            self.user_input.setFocus()
 
     @Slot(str)
     def _on_inference_error(self, error_msg):
@@ -433,15 +567,36 @@ class ChatWindow(QMainWindow):
         # block chat for now
         self.block_chat()
 
-    def run(self, prepare_function, run_inference_function, edit_message_function, delete_message_function):
+    def run(self, ended, prepare_function, run_inference_function, edit_message_function, delete_message_function, update_username_function):
         """Run chat function in a background thread while UI runs on main thread"""
         # Prepare LLM in another thread
         self.prepare_function = prepare_function
         self.run_inference_function = run_inference_function
         self.delete_message_function = delete_message_function
         self.edit_message_function = edit_message_function
+        self.update_username_function = update_username_function
+        self.ended = ended
 
-        self.prepare_llm()
+        # first ask the user for their username if not set
+        while not self.username:
+            # Create input dialog with icon
+            dialog = QtWidgets.QInputDialog(self)
+            dialog.setWindowTitle("Enter Username")
+            dialog.setLabelText("Please enter your username, make sure this will be how you call yourself in the chat:")
+            dialog.setTextValue(self.username if self.username else "")
+            dialog.setWindowIcon(self.style().standardIcon(QtWidgets.QStyle.SP_MessageBoxQuestion))
+            
+            ok = dialog.exec()
+            if ok:
+                self.username = dialog.textValue().strip()
+                if self.username:
+                    self.update_username_function(self.username)
+
+        if not ended:
+            self.prepare_llm()
+        else:
+            self.update_status("Chat has ended: " + ended)
+            self.block_chat()
 
     def _on_window_close(self):
         """Called when window is closed - terminate application"""
@@ -456,9 +611,9 @@ class ChatWindow(QMainWindow):
         # trigger the event from the thread, this is called from the inference thread
         self.inference_thread.add_character_text.emit(text)
 
-    def character_finished_typing(self):
+    def character_finished_typing(self, ended=None):
         # trigger the event from the thread, this is called from the inference thread
-        self.inference_thread.character_finished_typing.emit()
+        self.inference_thread.character_finished_typing.emit(ended)
 
     def block_chat(self):
         # block the user input box

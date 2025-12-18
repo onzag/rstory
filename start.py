@@ -3,6 +3,9 @@ from sys import argv
 from os import path
 import os
 import json
+from lib.bonds import BondsHandler
+from lib.emotion import EmotionHandler, read_emotion_list
+from lib.states import StatesHandler
 from lib.ui import ChatWindow
 from PySide6.QtWidgets import QApplication
 
@@ -42,43 +45,84 @@ if conversation_log_value == "new":
 last_log_path = path.join(character_folder, "logs", "last.json")
 if not path.exists(last_log_path):
     with open(last_log_path, "w", encoding="utf-8") as f:
-        f.write("[]")
+        f.write('{"history": [], "username": null, "bond": 0.0, "applied_states": [], "stranger": true}')
 
 conversation_log_path = path.join(character_folder, "logs", conversation_log_value)
 # read the conversation log from json
-chat_history = json.load(open(conversation_log_path, "r", encoding="utf-8"))
+chat_history_all = json.load(open(conversation_log_path, "r", encoding="utf-8"))
+chat_history = chat_history_all["history"]
+current_bond_weight = chat_history_all["bond"]
+current_applied_states = chat_history_all["applied_states"]
+current_stranger = chat_history_all["stranger"]
+current_ended = chat_history_all.get("ended", None)
+username = chat_history_all["username"]
 
 def save_conversation_log():
     """Save the current chat history to the conversation log file"""
     with open(conversation_log_path, "w", encoding="utf-8") as f:
-        json.dump(chat_history, f, ensure_ascii=False, indent=4)
+        json.dump(chat_history_all, f, ensure_ascii=False, indent=4)
+
+def update_username(new_username):
+    """Update the username in the chat history and save the log"""
+    username = new_username
+    chat_history_all["username"] = new_username
+    save_conversation_log()
+
+def update_bond(new_bond: float, save=True):
+    """Update the bond weight in the chat history and save the log"""
+    chat_history_all["bond"] = new_bond
+    if save:
+        save_conversation_log()
+
+def update_applied_states(new_states, save=True):
+    """Update the applied states in the chat history and save the log"""
+    chat_history_all["applied_states"] = new_states
+    if save:
+        save_conversation_log()
+
+def update_stranger(is_stranger, save=True):
+    """Update the stranger status in the chat history and save the log"""
+    chat_history_all["stranger"] = is_stranger
+    if save:
+        save_conversation_log()
 
 # System prompt read from bio.txt
 with open(character_system_description_path, "r", encoding="utf-8") as f:
     SYSTEM_PROMPT = f.read().strip()
+SYSTEM_PROMPT_EMOTIONS = None
+SYSTEM_PROMPT_STATES = None
 
 def count_tokens(text, llm_instance):
     """Estimate token count for a given text"""
     return len(llm_instance.tokenize(text.encode('utf-8')))
 
-def format_prompt(history, user_message, llm_instance=None, max_context=6000):
+def format_prompt(history, user_message, llm_instance=None, max_context=6000, special_instructions=None):
     """Format the conversation history with proper role tags for Llama 3.3
     Uses sliding window to keep only recent messages that fit in context.
     Reserves space for system prompt, new message, and response generation.
     """
     # Start with system prompt
-    system_part = f"<|start_header_id|>system<|end_header_id|>\n\n{SYSTEM_PROMPT}<|eot_id|>"
+    combined_system_prompt = SYSTEM_PROMPT + "\n" + SYSTEM_PROMPT_EMOTIONS + "\n" + SYSTEM_PROMPT_STATES
+    system_part = f"<|start_header_id|>system<|end_header_id|>\n\n{combined_system_prompt}<|eot_id|>"
     
     # Format the new user message
     user_part = ""
     if user_message is not None:
-        user_part = f"<|start_header_id|>user<|end_header_id|>\n\n{user_message}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n"
+        user_part = f"<|start_header_id|>user<|end_header_id|>\n\n{user_message}<|eot_id|>"
+        if not special_instructions:
+            user_part += "<|start_header_id|>assistant<|end_header_id|>\n\n"
+
+    if special_instructions:
+        special_instructions = f"\n\n<|start_header_id|>system<|end_header_id|>\n\n{special_instructions}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n"
     
     # Count tokens for system and user parts (reserve space)
     if llm_instance:
         system_tokens = count_tokens(system_part, llm_instance)
+        special_instructions_tokens = 0
+        if special_instructions:
+            special_instructions_tokens = count_tokens(special_instructions, llm_instance)
         user_tokens = count_tokens(user_part, llm_instance)
-        available_tokens = max_context - system_tokens - user_tokens
+        available_tokens = max_context - system_tokens - special_instructions_tokens - user_tokens
         
         # Build history from most recent messages backwards
         history_parts = []
@@ -104,13 +148,13 @@ def format_prompt(history, user_message, llm_instance=None, max_context=6000):
             
             history_parts.insert(0, msg_text)  # Insert at beginning to maintain order
             token_count += msg_tokens
-        
+
         # Combine all parts
-        prompt = system_part + "".join(history_parts) + user_part
+        prompt = system_part + "".join(history_parts) + user_part + (special_instructions if special_instructions else "")
         
         # Log token usage
         #total_tokens = system_tokens + token_count + user_tokens
-        #print(f"[Token usage: {total_tokens}/{max_context}, kept {len(history_parts)} history messages]", flush=True)
+        print(f"[Token usage: {token_count}/{max_context}, kept {len(history_parts)} history messages]", flush=True)
     else:
         # Fallback without token counting (shouldn't happen in practice)
         prompt = system_part
@@ -127,7 +171,7 @@ def format_prompt(history, user_message, llm_instance=None, max_context=6000):
 
 # Create QApplication instance before any widgets
 app = QApplication([])
-chat_window = ChatWindow(character_name_value, chat_history)
+chat_window = ChatWindow(character_name_value, chat_history, username)
 
 # display the window
 chat_window.show()
@@ -137,9 +181,23 @@ print("Character system loaded from:", character_system_description_path)
 print("Conversation log path:", conversation_log_path)
 print("Starting chat with character:", character_name_value)
 
+emotion_handler = EmotionHandler(character_folder)
+states_handler = StatesHandler(character_folder)
+bonds_handler = BondsHandler(character_folder)
+bonds_handler.check_against_status(states_handler.get_all_states())
+
 print("Loading Llama model...")
 
 def prepare_llm():
+    # during this call we got the username from the chat window already so we will use that
+    bonds_handler.apply_names(character_name_value, chat_window.username)
+    states_handler.apply_names(character_name_value, chat_window.username)
+
+    global SYSTEM_PROMPT_EMOTIONS
+    global SYSTEM_PROMPT_STATES
+    SYSTEM_PROMPT_EMOTIONS = emotion_handler.get_system_instructions(character_name_value)
+    SYSTEM_PROMPT_STATES = states_handler.get_system_instructions(character_name_value)
+
     chat_window.update_status("Loading model...")
 
     # Create a simple Llama instance
@@ -170,9 +228,26 @@ def run_inference(llm: Llama, user_input, dangling_user_message):
     if not dangling_user_message:
         chat_history.append({"role": "user", "content": user_input})
         save_conversation_log()
+
+    global bonds_handler
+    global current_bond_weight
+    global current_applied_states
+    global current_stranger
+    global current_ended
+    system_prompt_for_end = bonds_handler.get_instructions_for_bond(
+        current_bond_weight,
+        current_applied_states,
+        current_stranger,
+    )
         
     # Format the prompt with history
-    prompt = format_prompt(chat_history, None if dangling_user_message else user_input, llm_instance=llm, max_context=8192 - 512)
+    prompt = format_prompt(
+        chat_history,
+        None if dangling_user_message else user_input,
+        llm_instance=llm,
+        max_context=8192 - 512,
+        special_instructions=system_prompt_for_end
+    )
         
     # Generate response
     chat_window.character_is_typing()
@@ -191,12 +266,40 @@ def run_inference(llm: Llama, user_input, dangling_user_message):
         text = token["choices"][0]["text"]
         chat_window.add_character_text(text)
         response += text
-        
+
+    # calculate bond and states changes
+    new_bond, new_stranger = bonds_handler.calculate_bond_change_from_message(
+        current_bond_weight,
+        current_stranger,
+        len([msg for msg in chat_history if msg["role"] == "user" or msg["role"] == "assistant"]),
+        response,
+    )
+    new_applied_states = states_handler.get_next_applying_states_from_llm_response(
+        current_applied_states,
+        response,
+    )
+
+    print(f"Updated bond: {current_bond_weight} -> {new_bond}, stranger: {current_stranger} -> {new_stranger}, applied states: {current_applied_states} -> {new_applied_states}")
+
+    update_bond(new_bond, save=False)
+    update_stranger(new_stranger, save=False)
+    update_applied_states(new_applied_states, save=False)
+    current_bond_weight = new_bond
+    current_stranger = new_stranger
+    current_applied_states = new_applied_states
     chat_history.append({"role": "assistant", "content": response.strip()})
     save_conversation_log()
 
     chat_window.update_status("Ready for next message.")
-    chat_window.character_finished_typing()
+
+    end_tag_found = states_handler.llm_response_has_end_state(response)
+    if end_tag_found[0]:
+        chat_window.character_finished_typing(end_tag_found[2])
+        chat_history_all["ended"] = end_tag_found[2]
+        current_ended = end_tag_found[2]
+        save_conversation_log()
+    else:
+        chat_window.character_finished_typing(None)
 
 def edit_message(index, new_content):
     """Edit a message in the chat history and save the log"""
@@ -211,5 +314,12 @@ def delete_message(index):
         save_conversation_log()
 
 # Start the chat
-chat_window.run(prepare_llm, run_inference, edit_message, delete_message)
+chat_window.run(
+    current_ended,
+    prepare_llm,
+    run_inference,
+    edit_message,
+    delete_message,
+    update_username,
+)
 app.exec()
