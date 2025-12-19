@@ -1,6 +1,6 @@
 # we will now use pyside for the UI
 from PySide6 import QtWidgets, QtCore, QtGui
-from PySide6.QtWidgets import QMainWindow, QLabel, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QMainWindow, QLabel, QVBoxLayout, QWidget, QHBoxLayout
 from PySide6.QtCore import QThread, Signal, Slot
 import os
 import signal
@@ -43,8 +43,10 @@ def reformat_content(content):
 
 class PrepareLLMThread(QThread):
     """Thread for preparing LLM without blocking UI"""
-    finished = Signal(object)  # Emits the LLM instance when ready
+    finished_needs_to_be_called_something_else_because = Signal()  # Emits the LLM instance when ready
     error = Signal(str, str)  # Emit error message and traceback
+    # Signals for UI updates from worker thread
+    showcase_emotion = Signal(str)
     
     def __init__(self, prepare_function):
         super().__init__()
@@ -52,33 +54,34 @@ class PrepareLLMThread(QThread):
     
     def run(self):
         try:
-            llm = self.prepare_function()
-            self.finished.emit(llm)
+            self.prepare_function()
+            self.finished_needs_to_be_called_something_else_because.emit()
         except Exception as e:
             tb = traceback.format_exc()
             self.error.emit(str(e), tb)
 
 class RunInferenceThread(QThread):
     """Thread for running inference without blocking UI"""
-    finished = Signal()
+    finished_needs_to_be_called_something_else_because = Signal()
     error = Signal(str, str)  # Emit error message and traceback
     # Signals for UI updates from worker thread
     character_is_typing = Signal()
     add_character_text = Signal(str)
     character_finished_typing = Signal(str)
+    showcase_emotion = Signal(str)
+    add_system_text = Signal(str)
     
-    def __init__(self, run_inference_function, llm, user_input, dangling_user_message, chat_window):
+    def __init__(self, run_inference_function, user_input, dangling_user_message, chat_window):
         super().__init__()
         self.run_inference_function = run_inference_function
-        self.llm = llm
         self.user_input = user_input
         self.dangling_user_message = dangling_user_message
         self.chat_window = chat_window
     
     def run(self):
         try:
-            self.run_inference_function(self.llm, self.user_input, self.dangling_user_message)
-            self.finished.emit()
+            self.run_inference_function(self.user_input, self.dangling_user_message)
+            self.finished_needs_to_be_called_something_else_because.emit()
         except Exception as e:
             tb = traceback.format_exc()
             self.error.emit(str(e), tb)
@@ -137,7 +140,7 @@ class ChatMessage:
 
         # add a context menu to copy text
         self.label.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
-        if not uninitialized:
+        if not uninitialized and role in ["user", "assistant"]:
             self.label.customContextMenuRequested.connect(self._show_context_menu)
         
         self.label.setWordWrap(True)
@@ -150,7 +153,8 @@ class ChatMessage:
         if scroll_to_bottom:
             QtCore.QTimer.singleShot(100, self.parent._scroll_to_bottom)
 
-        parent.messages.append(self)
+        if role in ["user", "assistant"]:
+            parent.messages.append(self)
 
     def reinsert_into_layout(self, layout):
         layout.insertWidget(layout.count() - 1, self.label)
@@ -341,8 +345,19 @@ class ChatWindow(QMainWindow):
         self.status_label = QLabel("Status: Ready", self)
         self.status_label.setAlignment(QtCore.Qt.AlignCenter)
         layout = QVBoxLayout()
-        layout.addWidget(self.status_label)
+        labels_layout = QHBoxLayout()
         self.central_widget.setLayout(layout)
+        layout.addLayout(labels_layout)
+
+        self.emotion_label = QLabel("", self)
+        self.emotion_label.setAlignment(QtCore.Qt.AlignCenter)
+        self.current_emotion = None
+
+        labels_layout.addWidget(self.status_label)
+        labels_layout.addWidget(self.emotion_label)
+
+        # ensure that the status label and emotion label share the space equally
+        labels_layout.setStretch(1, 1)
 
         # create a container for the chat history that is scrollable
         self.chat_history_container = QtWidgets.QScrollArea()
@@ -421,7 +436,8 @@ class ChatWindow(QMainWindow):
         """Handle Enter key press in user input box"""
         user_text = self.user_input.toPlainText().strip()
         if user_text:
-            self._add_message_label("user", user_text, scroll_to_bottom=True)
+            if not user_text.startswith("/"):
+                self._add_message_label("user", user_text, scroll_to_bottom=True)
             # clear the user input box
             self.user_input.clear()
 
@@ -468,15 +484,14 @@ class ChatWindow(QMainWindow):
 
         # Create and start the prepare thread
         self.prepare_thread = PrepareLLMThread(self.prepare_function)
-        self.prepare_thread.finished.connect(self._on_llm_ready)
+        self.prepare_thread.finished_needs_to_be_called_something_else_because.connect(self._on_llm_ready)
         self.prepare_thread.error.connect(self._on_llm_error)
+        self.prepare_thread.showcase_emotion.connect(self._showcase_emotion)
         self.prepare_thread.start()
 
-    @Slot(object)
-    def _on_llm_ready(self, llm):
+    @Slot()
+    def _on_llm_ready(self):
         """Called when LLM is ready"""
-        self.llm = llm
-
         self.update_status("LLM initialized!")
 
         if not self.has_initialized_first:
@@ -510,14 +525,16 @@ class ChatWindow(QMainWindow):
             return  # do not run inference if chat has ended
         # in the same manner as prepare_llm, run inference in another thread
         self.block_chat()
-        self.inference_thread = RunInferenceThread(self.run_inference_function, self.llm, user_input, dangling_user_message, self)
+        self.inference_thread = RunInferenceThread(self.run_inference_function, user_input, dangling_user_message, self)
         
         # Connect thread signals to main thread slots
         self.inference_thread.character_is_typing.connect(self._character_is_typing)
         self.inference_thread.add_character_text.connect(self._add_character_text)
         self.inference_thread.character_finished_typing.connect(self._character_finished_typing)
-        self.inference_thread.finished.connect(self._on_inference_finished)
+        self.inference_thread.finished_needs_to_be_called_something_else_because.connect(self._on_inference_finished)
         self.inference_thread.error.connect(self._on_inference_error)
+        self.inference_thread.showcase_emotion.connect(self._showcase_emotion)
+        self.inference_thread.add_system_text.connect(self._add_system_text)
         
         self.inference_thread.start()
 
@@ -554,7 +571,7 @@ class ChatWindow(QMainWindow):
         if last_message.role == "assistant":
             last_message.unmark_uninitialized()
 
-        if ended is not None:
+        if ended:
             self.ended = ended
             self.update_status("Chat has ended: " + ended)
             self.block_chat()
@@ -620,6 +637,22 @@ class ChatWindow(QMainWindow):
         # trigger the event from the thread, this is called from the inference thread
         self.inference_thread.add_character_text.emit(text)
 
+    def showcase_emotion(self, emotion: str):
+        self.inference_thread.showcase_emotion.emit(emotion)
+
+    def showcase_emotion_from_prepare(self, emotion: str):
+        self.prepare_thread.showcase_emotion.emit(emotion)
+
+    @Slot(str)
+    def _showcase_emotion(self, emotion: str):
+        """Slot called from worker thread - safe for UI updates"""
+        if emotion != self.current_emotion:
+            self.current_emotion = emotion
+            if emotion:
+                self.emotion_label.setText(f"{self.character_name}: {emotion}")
+            else:
+                self.emotion_label.setText("")
+
     def character_finished_typing(self, ended=None):
         # trigger the event from the thread, this is called from the inference thread
         self.inference_thread.character_finished_typing.emit(ended)
@@ -631,3 +664,11 @@ class ChatWindow(QMainWindow):
     def unblock_chat(self):
         # unblock the user input box
         self.user_input.setDisabled(False)
+
+    def add_system_text(self, text):
+        self.inference_thread.add_system_text.emit(text)
+
+    @Slot(str)
+    def _add_system_text(self, text):
+        """Slot called from worker thread - safe for UI updates"""
+        self._add_message_label("system", text, scroll_to_bottom=True)

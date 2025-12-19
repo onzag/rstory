@@ -33,6 +33,8 @@ class BondsHandler:
             "bond_stranger_messages_breakaway_negative_multiplier": "pos_float",
             "bond_stranger_negative_bias_multiplier": "pos_float",
             "bond_negative_bias_multiplier": "pos_float",
+            "bond_stranger_neutral_bias_multiplier": "pos_float",
+            "bond_neutral_bias_multiplier": "pos_float",
         }
         for attr in required_attributes:
             if attr not in self.bonds_config:
@@ -57,6 +59,8 @@ class BondsHandler:
         self.bond_stranger_messages_breakaway_negative_multiplier = self.bonds_config["bond_stranger_messages_breakaway_negative_multiplier"]
         self.bond_stranger_negative_bias_multiplier = self.bonds_config["bond_stranger_negative_bias_multiplier"]
         self.bond_negative_bias_multiplier = self.bonds_config["bond_negative_bias_multiplier"]
+        self.bond_neutral_bias_multiplier = self.bonds_config["bond_neutral_bias_multiplier"]
+        self.bond_stranger_neutral_bias_multiplier = self.bonds_config["bond_stranger_neutral_bias_multiplier"]
 
         # list all the files in bonds_folder
         self.bond_files = [f for f in listdir(self.bonds_folder) if f.endswith(".txt")]
@@ -186,7 +190,7 @@ class BondsHandler:
                 state, value = line.split(":", 1)
                 self.processed_stranger_bad_bond[state.strip()] = value.strip()
 
-    def get_instructions_for_bond(self, bond_value: int, applying_states: list[list[str, int]], stranger_bond: bool) -> dict[str, str]:
+    def get_instructions_for_bond(self, bond_value: int, applying_states: list[list[str, int, int]], stranger_bond: bool) -> dict[str, str]:
         """Get the bond instructions for the given bond value"""
         processed_bond = None
         if stranger_bond:
@@ -220,7 +224,7 @@ class BondsHandler:
         ]
         all_instructions = processed_bond.get("*", "")
 
-        for state, intensity in applying_states:
+        for state, intensity, decay in applying_states:
             if state in processed_bond:
                 intensity_label = ""
                 for level, label in intensity_labels:
@@ -235,11 +239,11 @@ class BondsHandler:
                 # check if is is required, check if it ends in s
                 if first_word[-1] == "s":
                     is_added = " "
-                all_instructions += "\n" + self.character_name + is_added + "currently " + intensity_label + state_wordified + ", " + processed_bond[state] + ", to remove this state add the tag " + state.upper() + "_DECREASE at the end of the message."
+                all_instructions += "\n" + self.character_name + is_added + "currently " + intensity_label + state_wordified + ", " + processed_bond[state] + ", to remove this state add the message " + state.upper() + "_DECREASE at the end of the message."
 
-        return all_instructions + f"\nkeep the answer at most two paragraphs long and do not predict {self.username} nor his reactions, roleplay as {self.character_name} only."
+        return all_instructions + f"\nYou MUST end answers with INTERACTION_POSITIVE, INTERACTION_NEGATIVE or INTERACTION_NEUTRAL; focus on actions more than conversation, be descriptive, keep the answer at most 3 paragraphs long and do not predict {self.username} nor his reactions, roleplay as {self.character_name} only."
         
-    def calculate_bond_change(self, current_bond: float, current_stranger: bool, total_messages_exchanged: int, change: Literal["pos", "neg", "neutral"]) -> float:
+    def calculate_bond_change(self, current_bond: float, current_stranger: bool, total_messages_exchanged: int, change: Literal["pos", "neg", "neutral"], minis: int) -> float:
         next_bond_amount = current_bond
         if change == "pos":
             next_bond_amount += self.bond_climb_rate
@@ -250,7 +254,10 @@ class BondsHandler:
             if next_bond_amount < -100:
                 next_bond_amount = -100
         else:
-            pass  # neutral, no change
+            next_bond_amount += self.bond_climb_rate * (self.bond_stranger_neutral_bias_multiplier if current_stranger else self.bond_neutral_bias_multiplier)
+
+        # add the mini bonuses, that count as neutral interactions
+        next_bond_amount += minis * self.bond_climb_rate * (self.bond_stranger_neutral_bias_multiplier if current_stranger else self.bond_neutral_bias_multiplier)
 
         next_stranger = current_stranger
         if current_stranger:
@@ -266,7 +273,7 @@ class BondsHandler:
     def get_system_instructions(self) -> str:
         return f"You MUST include one of these at the end of the reply:\nINTERACTION_POSITIVE\nINTERACTION_NEGATIVE\nINTERACTION_NEUTRAL\n\nThis specifies whether the interaction was positive, negative or neutral and grows or shrinks the bond accordingly"
     
-    def calculate_bond_change_from_message(self, current_bond: float, current_stranger: bool, total_messages_exchanged: int, message: str) -> tuple[float, bool]:
+    def calculate_bond_change_from_message(self, current_bond: float, current_stranger: bool, total_messages_exchanged: int, message: str, minis: int) -> tuple[float, bool]:
         """Find the INTERACTION_POSITIVE, INTERACTION_NEGATIVE, or INTERACTION_NEUTRAL tag in the message and calculate the bond change accordingly"""
         change = "neutral"
         # just grab the text because of issues with the LLM sometimes not following instructions properly
@@ -275,4 +282,4 @@ class BondsHandler:
         elif "INTERACTION_NEGATIVE" in message:
             change = "neg"
 
-        return self.calculate_bond_change(current_bond, current_stranger, total_messages_exchanged, change)
+        return self.calculate_bond_change(current_bond, current_stranger, total_messages_exchanged, change, minis)

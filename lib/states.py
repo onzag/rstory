@@ -24,11 +24,16 @@ def read_states_list(states_path: str) -> list[str]:
     # states however have a random spawn rate, indicated by them having a = and a floating point number after them
     state_rates_common = {}
     state_rates = {}
-
+    plus_states = []
+    
     for state in states + common_states:
         if "=" in state:
             parts = state.split("=")
             state_name = parts[0]
+            plus_state = False
+            if state_name[-1] == "+":
+                state_name = state_name[:-1]
+                plus_state = True
             try:
                 rate = float(parts[1])
             except ValueError:
@@ -36,17 +41,27 @@ def read_states_list(states_path: str) -> list[str]:
             # check that rate is between 0 and 1
             if rate < 0.0 or rate > 1.0:
                 raise ValueError(f"Spawn rate for state '{state_name}' must be between 0.0 and 1.0")
-            if state in states:
-                state_rates[parts[0]] = rate
+            if state_name in states:
+                state_rates[state_name] = rate
             else:
-                state_rates_common[parts[0]] = rate
+                state_rates_common[state_name] = rate
+
+            if plus_state:
+                plus_states.append(state_name)
         else:
+            plus_state = False
+            if state[-1] == "+":
+                state = state[:-1]
+                plus_state = True
             if state in states:
                 state_rates[state] = 0.0  # default rate
             else:
                 state_rates_common[state] = 0.0  # default rate
 
-    return (state_rates, state_rates_common)
+            if plus_state:
+                plus_states.append(state)
+
+    return (state_rates, state_rates_common, plus_states)
 
 def read_end_states_list(end_states_path: str) -> list[(str, str)]:
     """Read the list of end states from the given file path"""
@@ -78,7 +93,7 @@ class StatesHandler:
     def __init__(self, general_path: str):
         self.general_path = general_path
         # load states from the states.txt file
-        self.states, self.common_states = read_states_list(path.join(general_path, "states.txt"))
+        self.states, self.common_states, self.plus_states = read_states_list(path.join(general_path, "states.txt"))
         self.end_states = read_end_states_list(path.join(general_path, "end_states.txt"))
 
         print(f"Loaded {len(self.states) + len(self.common_states)} states, {len(self.common_states)} common states.")
@@ -108,13 +123,22 @@ class StatesHandler:
             applied_end_states.append((state, description))
         self.end_states = applied_end_states
     
-    def get_next_applying_states(self, current_applying_states: list[list[str, int]], llm_given_states_add: list[str], llm_given_states_reduce: list[str], llm_state_to_add_if_not_present: list[str]) -> list[list[str, int]]:
+    def get_next_applying_states(self, current_applying_states: list[list[str, int, int]], llm_given_states_add: list[str], llm_given_states_reduce: list[str], llm_state_to_add_if_not_present: list[str]) -> list[list[str, int, int]]:
         """Get a list of states that are currently applying based on their durations"""
         random_states = self.get_random_applied_states()
         new_applying_states = []
         for state_info in current_applying_states:
             state = state_info[0]
             intensity = state_info[1]
+            decay_rate = state_info[2]
+            new_decay_rate = decay_rate - 1
+            if new_decay_rate == 0:
+                if intensity == 4:
+                    intensity -= 2  # decrease intensity faster if at max
+                else:
+                    intensity -= 1  # decrease intensity if duration is over
+                new_decay_rate = 3  # reset decay rate
+
             if state in llm_given_states_add or state in random_states:
                 intensity += 1  # increase intensity if state is given again
                 if intensity > 4:
@@ -123,33 +147,38 @@ class StatesHandler:
                 intensity = 0  # remove state if told to reduce
                 # this is because the LLM may get caught in a loop of increasing and decreasing the same state
             if intensity > 0:
-                new_applying_states.append([state, intensity])
+                new_applying_states.append([state, intensity, new_decay_rate])
         # now let's add possibly new states from llm_given_states_add and random_states
         for state in llm_given_states_add + random_states:
             if state not in [s[0] for s in new_applying_states]:
-                new_applying_states.append([state, 1])  # add new state with intensity 1
+                new_applying_states.append([state, 1, 3])  # add new state with intensity 1
         for state_to_add_if_not_present in llm_state_to_add_if_not_present:
             if state_to_add_if_not_present not in [s[0] for s in new_applying_states] and state_to_add_if_not_present not in llm_given_states_reduce:
-                new_applying_states.append([state_to_add_if_not_present, 1])  # add new state with intensity 1
+                new_applying_states.append([state_to_add_if_not_present, 1, 3])  # add new state with intensity 1
         return new_applying_states
     
-    def get_system_instructions(self, character_name):
+    def get_system_instructions(self):
         common_states = list(self.common_states.keys())
         common_states_increase_tags = "\n".join([f"{state}_INCREASE" for state in common_states])
         common_states_decrease_tags = "\n".join([f"{state}_DECREASE" for state in common_states])
         normal_states = list(self.states.keys())
         normal_states_increase_tags = "\n".join([f"{state}_INCREASE" for state in normal_states])
         normal_states_decrease_tags = "\n".join([f"{state}_DECREASE" for state in normal_states])
-        basic_prompt = f"\nYou MUST add one or many state tags at the end of every response" + \
-               "\n\nThe most common tags to use are:\n" + common_states_increase_tags + "\n\nWhich can be decreased by specifying:\n" + common_states_decrease_tags + \
-                "\n\nAlso use the tags:\n" + normal_states_increase_tags + "\n\nAnd decrease by specifying:\n" + normal_states_decrease_tags + \
-                "\n\nYou MUST use these tags to reflect changes in the character's emotional and mental state by the end of the conversation."
-        end_prompt = f"You MUST use one of these tags only if something catastrophic happens:\n" + \
+        basic_prompt = f"\nYou MUST include one of these phrases or tags at the end of every response" + \
+               "\n\nThe tags to use are:\n" + common_states_increase_tags  + common_states_decrease_tags + normal_states_increase_tags + normal_states_decrease_tags + \
+                "\n\nYou MUST use at most 3 of these tags to reflect changes in the character's emotional and mental state by the end of the conversation."
+        end_prompt = f"You MUST use one of these phrases or tags only if something catastrophic happens:\n" + \
             "\n".join([f"{state}: {description}" for state, description in self.end_states]) + \
             "\nYou MUST use these tags only when the story context justifies their application."
         return basic_prompt + "\n\n" + end_prompt
     
-    def get_next_applying_states_from_llm_response(self, current_applying_states: list[list[str, int]], llm_response: str) -> list[list[str, int]]:
+    def get_next_applying_states_from_llm_response(
+            self,
+            current_applying_states: list[list[str, int, int]],
+            llm_response: str,
+            states_to_add: set[str],
+            states_to_reduce: set[str],
+        ) -> list[list[str, int, int]]:
         """Get the next applying states based on the LLM response"""
         llm_given_states_add = []
         llm_given_states_reduce = []
@@ -162,6 +191,14 @@ class StatesHandler:
                 llm_given_states_reduce.append(state)
             if state in llm_response:
                 llm_state_to_add_if_not_present.append(state)
+
+        for state in states_to_add:
+            if state in self.get_all_states() and state not in llm_given_states_add:
+                llm_given_states_add.append(state)
+        for state in states_to_reduce:
+            if state in self.get_all_states() and state not in llm_given_states_reduce:
+                llm_given_states_reduce.append(state)
+                
         return self.get_next_applying_states(current_applying_states, llm_given_states_add, llm_given_states_reduce, llm_state_to_add_if_not_present)
     
     def llm_response_has_end_state(self, llm_response: str) -> tuple[bool, str]:
@@ -170,3 +207,12 @@ class StatesHandler:
             if f"[[{state}]]" in llm_response:
                 return (True, state, description)
         return (False, "", "")
+    
+    def get_mini_bonuses(self, applied_states: list[list[str, int, int]]) -> int:
+        """Get the number of mini bonuses from the applied states"""
+        mini_bonuses = 0
+        for state_info in applied_states:
+            state = state_info[0]
+            if state in self.plus_states:
+                mini_bonuses += state_info[1]  # add intensity as mini bonuses
+        return mini_bonuses
