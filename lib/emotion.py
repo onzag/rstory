@@ -287,7 +287,7 @@ class EmotionHandler:
         #remaining_emotion_tags = "\n".join(em for em in self.emotions.keys())
         instructions = f"\nYou MUST use emotions in each paragraph to indicate the emotional state of {self.character_name}."
         instructions += f"\n{self.character_name} is very prone to being:\n{common_emotion_tags}"
-        instructions += "\n\nYou MUST use asterisks *like this* to indicate and describe actions or descriptions outside of dialogue."
+        instructions += "\n\nYou MUST use asterisks *like this* to indicate and describe actions or descriptions outside of dialogue, always speak about yourself in third person when using asterisks."
         return instructions
     
     def restart_rolling_emotions(self):

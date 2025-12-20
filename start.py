@@ -17,6 +17,10 @@ PRESENCE_PENALTY = 0.5
 TEMPERATURE = 1.0
 TOP_P = 0.9
 
+LAST_EMOTIONS_TRIGGERED = set()
+LAST_STATES_TRIGGERED_ADD = set()
+LAST_STATES_TRIGGERED_DISCARD = set()
+
 # Path to your GGUF file (adjust to your fast SSD)
 # must be Llama 3.3 compatible model for these settings to work properly
 model_path = argv[1]
@@ -109,7 +113,7 @@ if conversation_log_value == "new":
 last_log_path = path.join(character_folder, "logs", "last.json")
 if not path.exists(last_log_path):
     with open(last_log_path, "w", encoding="utf-8") as f:
-        f.write('{"history": [], "username": null, "bond": 0.0, "applied_states": [], "stranger": true}')
+        f.write('{"history": [], "username": null, "bond": 0.0, "applied_states": [], "stranger": true, "ran_post_inference_last": true}')
 
 conversation_log_path = path.join(character_folder, "logs", conversation_log_value)
 # read the conversation log from json
@@ -120,6 +124,7 @@ current_applied_states = chat_history_all["applied_states"]
 current_stranger = chat_history_all["stranger"]
 current_ended = chat_history_all.get("ended", None)
 username = chat_history_all["username"]
+ran_post_inference_last = chat_history_all.get("ran_post_inference_last", False)
 
 def save_conversation_log():
     """Save the current chat history to the conversation log file"""
@@ -146,6 +151,12 @@ def update_applied_states(new_states, save=True):
 def update_stranger(is_stranger, save=True):
     """Update the stranger status in the chat history and save the log"""
     chat_history_all["stranger"] = is_stranger
+    if save:
+        save_conversation_log()
+
+def update_ran_post_inference_last(ran_post_inference, save=True):
+    """Update the ran_post_inference_last status in the chat history and save the log"""
+    chat_history_all["ran_post_inference_last"] = ran_post_inference
     if save:
         save_conversation_log()
 
@@ -258,6 +269,41 @@ def format_prompt(history, max_context=6000, special_instructions=""):
 
     clean_token_cache()
     
+    return prompt
+
+def format_prompt_for_analysis(
+        history,
+        username,
+        character_name,
+        special_user_message,
+        system_prompt,
+        confirmation_prompt,
+    ):
+    """Format the conversation history for bond calculation prompt"""
+    system_part = f"<|start_header_id|>system<|end_header_id|>\n\n{system_prompt}<|eot_id|>"
+    end_prompt = "<|start_header_id|>assistant<|end_header_id|>\n\n"
+    last_user_message = ""
+    last_assistant_message = ""
+    for msg in reversed(history):
+        if msg["role"] == "user" and last_user_message == "":
+            last_user_message = msg["content"]
+        elif msg["role"] == "assistant" and last_assistant_message == "":
+            last_assistant_message = msg["content"]
+        if last_user_message != "" and last_assistant_message != "":
+            break
+    # because this is for evaluation the user part will be both user and assistant messages
+    # to prevent confusion we will split them in lines each line starting with the speaker name
+    last_user_message = username + ": " + ". ".join(lines for lines in last_user_message.split("\n") if lines.strip() != "")
+    last_assistant_message = character_name + ": " + ". ".join(lines for lines in last_assistant_message.split("\n") if lines.strip() != "")
+    
+    # Format as a clear classification task, not continuation
+    user_part = f"<|start_header_id|>user<|end_header_id|>Interaction to analyze:\n\n{special_user_message}\n{last_user_message}\n{last_assistant_message}\n\n{confirmation_prompt}<|eot_id|>"
+
+    # we don't count because this is guaranteed to be small enough
+    prompt = system_part + user_part + end_prompt
+
+    print(prompt)
+
     return prompt
 
 # Create QApplication instance before any widgets
@@ -447,12 +493,13 @@ def run_inference(user_input, dangling_user_message):
     global current_applied_states
     global current_stranger
     global current_ended
-    system_prompt_for_end = bonds_handler.get_instructions_for_bond(
+    global ran_post_inference_last
+    system_prompt_for_end = "*" + bonds_handler.get_instructions_for_bond(
         current_bond_weight,
         current_applied_states,
         current_stranger,
-    )
-        
+    ) + "*\n"
+    
     # Format the prompt with history
     prompt = format_prompt(
         chat_history,
@@ -469,7 +516,6 @@ def run_inference(user_input, dangling_user_message):
     states_triggered_discard = set([])
 
     # we will start a streaming request to the server
-    prompt_url = "http://localhost:8000/generate"
     action = {
         "action": "generate",
         "prompt": prompt,
@@ -512,56 +558,22 @@ def run_inference(user_input, dangling_user_message):
 
     if next_message["type"] == "error":
         chat_window.add_system_text(f"Error during generation: {next_message['message']}")
+        raise Exception("Error during generation: " + next_message["message"])
 
-    # check if no INTERACTION_POSITIVE, INTERACTION_NEGATIVE or INTERACTION_NEUTRAL was added, if not add NEUTRAL by default
-    interaction_states = ["INTERACTION_POSITIVE", "INTERACTION_NEGATIVE", "INTERACTION_NEUTRAL"]
-    if not any(interaction_state in response for interaction_state in interaction_states):
-        to_add = "INTERACTION_NEUTRAL"
-        if response.endswith("\n"):
-            to_add = "\nINTERACTION_NEUTRAL"
-        else:
-            to_add = "\n\nINTERACTION_NEUTRAL"
-        response += to_add
-        print("Missing interaction state detected, adding INTERACTION_NEUTRAL by default.")
-        chat_window.add_character_text(to_add)
+    global LAST_EMOTIONS_TRIGGERED
+    global LAST_STATES_TRIGGERED_ADD
+    global LAST_STATES_TRIGGERED_DISCARD
 
-    # calculate bond and states changes
-    new_applied_states = states_handler.get_next_applying_states_from_llm_response(
-        current_applied_states,
-        response,
-        states_triggered_add,
-        states_triggered_discard,
-    )
-    mini_bonuses = states_handler.get_mini_bonuses(new_applied_states)
-    new_bond, new_stranger = bonds_handler.calculate_bond_change_from_message(
-        current_bond_weight,
-        current_stranger,
-        len([msg for msg in chat_history if msg["role"] == "user" or msg["role"] == "assistant"]),
-        response,
-        mini_bonuses,
-    )
+    LAST_EMOTIONS_TRIGGERED = emotions_triggered
+    LAST_STATES_TRIGGERED_ADD = states_triggered_add
+    LAST_STATES_TRIGGERED_DISCARD = states_triggered_discard
 
-    print(f"Updated bond: {current_bond_weight} -> {new_bond}, stranger: {current_stranger} -> {new_stranger}, applied states: {current_applied_states} -> {new_applied_states}, bond mini bonuses: {mini_bonuses}")
-
-    update_bond(new_bond, save=False)
-    update_stranger(new_stranger, save=False)
-    update_applied_states(new_applied_states, save=False)
-    current_bond_weight = new_bond
-    current_stranger = new_stranger
-    current_applied_states = new_applied_states
     chat_history.append({"role": "assistant", "content": response.strip()})
+    ran_post_inference_last = False
+    chat_history_all["ran_post_inference_last"] = ran_post_inference_last
     save_conversation_log()
 
     chat_window.update_status("Ready for next message.")
-
-    end_tag_found = states_handler.llm_response_has_end_state(response)
-    if end_tag_found[0]:
-        chat_window.character_finished_typing(end_tag_found[2])
-        chat_history_all["ended"] = end_tag_found[2]
-        current_ended = end_tag_found[2]
-        save_conversation_log()
-    else:
-        chat_window.character_finished_typing(None)
 
 def edit_message(index, new_content):
     """Edit a message in the chat history and save the log"""
@@ -575,11 +587,162 @@ def delete_message(index):
         del chat_history[index]
         save_conversation_log()
 
+def run_post_inference():
+    """Function to run after inference is complete (if needed)"""
+
+    global LAST_EMOTIONS_TRIGGERED
+    global LAST_STATES_TRIGGERED_ADD
+    global LAST_STATES_TRIGGERED_DISCARD
+    global current_bond_weight
+    global current_stranger
+    global current_applied_states
+    global ran_post_inference_last
+
+    special_user_message_regarding_bonds = "*" + bonds_handler.get_instructions_for_bond(
+        current_bond_weight,
+        current_applied_states,
+        current_stranger,
+        for_bond_change=True,
+    ) + "*"
+
+    post_bond_analysis_prompt = format_prompt_for_analysis(
+        chat_history,
+        chat_window.username,
+        character_name_value,
+        special_user_message_regarding_bonds,
+        bonds_handler.get_post_inference_system_instructions(),
+        bonds_handler.get_post_inference_confirmation_prompt(),
+    )
+
+    # we will start a streaming request to the server
+    action = {
+        "action": "generate",
+        "prompt": post_bond_analysis_prompt,
+        "max_tokens": 128,
+        "stream": True,
+        "stop": ["<|eot_id|>", "<|start_header_id|>"],
+
+        # different settings for this as we want a more focused response
+        "repeat_penalty": 1.0,           # No repeat penalty
+        "frequency_penalty": 0.0,        # No frequency penalty
+        "presence_penalty": 0.0,          # No presence penalty
+        "temperature": 0.8,              # Lower temperature for focused responses
+        "top_p": 0.8,                   # Nucleus sampling
+    }
+    ws = websocket.create_connection("ws://localhost:8000")
+    ws.send(json.dumps(action))
+
+    post_inference_response = ""
+
+    next_message = json.loads(ws.recv())
+    print("Post inference bond response: ", end="", flush=True)
+    while next_message["type"] != "done" and next_message["type"] != "error":
+        if next_message["type"] == "token":
+            text = next_message["text"]
+            post_inference_response += text
+            print(text, end="", flush=True)
+        next_message = json.loads(ws.recv())
+    ws.close()
+    print()
+
+    if next_message["type"] == "error":
+        chat_window.add_system_text(f"Error during post processing: {next_message['message']}")
+        raise Exception("Error during post processing: " + next_message["message"])
+    
+    post_inference_state_prompt = format_prompt_for_analysis(
+        chat_history,
+        chat_window.username,
+        character_name_value,
+        special_user_message_regarding_bonds,
+        states_handler.get_post_inference_system_instructions(),
+        states_handler.get_post_inference_confirmation_prompt(),
+    )
+
+     # we will start a streaming request to the server
+    action = {
+        "action": "generate",
+        "prompt": post_inference_state_prompt,
+        "max_tokens": 1024,
+        "stream": True,
+        # default ones
+        "stop": ["<|eot_id|>", "<|start_header_id|>"],
+
+        # different settings for this as we want a more focused response
+        "repeat_penalty": 1.0,           # No repeat penalty
+        "frequency_penalty": 0.0,        # No frequency penalty
+        "presence_penalty": 0.0,          # No presence penalty
+        "temperature": 0.8,              # Lower temperature for focused responses
+        "top_p": 0.8,                   # Nucleus sampling
+    }
+    ws = websocket.create_connection("ws://localhost:8000")
+    ws.send(json.dumps(action))
+
+    post_inference_state_response = ""
+
+    next_message = json.loads(ws.recv())
+    print("Post inference state response: ", end="", flush=True)
+    while next_message["type"] != "done" and next_message["type"] != "error":
+        if next_message["type"] == "token":
+            text = next_message["text"]
+            post_inference_state_response += text
+            print(text, end="", flush=True)
+        next_message = json.loads(ws.recv())
+    print()
+    ws.close()
+
+    new_applied_states_add, new_applied_states_decrease, new_applied_states_remove = states_handler.analyze_response_for_states(
+        post_inference_state_response,
+    )
+
+    # TODO restore end state detection
+    #if end_state:
+    #    print(f"End state detected from post inference: {end_state}")
+    #    chat_window.character_finished_typing(end_tag_found[2])
+    #    chat_history_all["ended"] = end_tag_found[2]
+    #    current_ended = end_tag_found[2]
+    #     save_conversation_log()
+    #else:
+    #    chat_window.character_finished_typing(None)
+
+    new_applied_states = states_handler.get_next_applying_states(
+        current_applied_states,
+        new_applied_states_add,
+        new_applied_states_decrease,
+        new_applied_states_remove,
+        LAST_STATES_TRIGGERED_ADD,
+        LAST_STATES_TRIGGERED_DISCARD,
+    )
+
+    # calculate bond and states changes
+    mini_bonuses = states_handler.get_mini_bonuses(new_applied_states)
+    new_bond, new_stranger = bonds_handler.calculate_bond_change_from_post_inference(
+        current_bond_weight,
+        current_stranger,
+        len([msg for msg in chat_history if msg["role"] == "user" or msg["role"] == "assistant"]),
+        post_inference_response,
+        mini_bonuses,
+    )
+
+    print(f"Updated bond: {current_bond_weight} -> {new_bond}, stranger: {current_stranger} -> {new_stranger}, applied states: {current_applied_states} -> {new_applied_states}, bond mini bonuses: {mini_bonuses}")
+
+    update_bond(new_bond, save=False)
+    update_stranger(new_stranger, save=False)
+    update_applied_states(new_applied_states, save=False)
+    update_ran_post_inference_last(True, save=False)
+    ran_post_inference_last = True
+    current_bond_weight = new_bond
+    current_stranger = new_stranger
+    current_applied_states = new_applied_states
+
+    save_conversation_log()
+
 # Start the chat
 chat_window.run(
     current_ended,
+    ran_post_inference_last,
     prepare_llm,
     run_inference,
+    run_post_inference,
     edit_message,
     delete_message,
     update_username,

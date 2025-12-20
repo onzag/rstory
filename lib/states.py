@@ -115,6 +115,8 @@ class StatesHandler:
         return applied_states
     
     def apply_names(self, character_name: str, username: str):
+        self.character_name = character_name
+        self.username = username
         # we apply the character name and username to the end_states descriptions
         applied_end_states = []
         for state, description in self.end_states:
@@ -122,8 +124,24 @@ class StatesHandler:
             description = description.replace("{{user}}", username)
             applied_end_states.append((state, description))
         self.end_states = applied_end_states
+
+    def format_state_human_readable(self, state: str) -> str:
+        """Format a state to be more human readable by replacing underscores with spaces and capitalizing words"""
+        return state.replace("_", " ").title()
     
-    def get_next_applying_states(self, current_applying_states: list[list[str, int, int]], llm_given_states_add: list[str], llm_given_states_reduce: list[str], llm_state_to_add_if_not_present: list[str]) -> list[list[str, int, int]]:
+    def format_state_human_readable_list(self, states: list[str]) -> str:
+        """Format a list of states to be more human readable"""
+        return ", ".join([self.format_state_human_readable(state) for state in states])
+    
+    def get_next_applying_states(
+            self,
+            current_applying_states: list[list[str, int, int]],
+            llm_given_states_add: list[str],
+            llm_given_states_reduce: list[str],
+            llm_given_states_remove: list[str],
+            states_to_add_if_not_present: list[str],
+            states_to_reduce_if_present: list[str],
+        ) -> list[list[str, int, int]]:
         """Get a list of states that are currently applying based on their durations"""
         random_states = self.get_random_applied_states()
         new_applying_states = []
@@ -143,73 +161,123 @@ class StatesHandler:
                 intensity += 1  # increase intensity if state is given again
                 if intensity > 4:
                     intensity = 4  # cap intensity at 4
-            if state in llm_given_states_reduce:
-                intensity = 0  # remove state if told to reduce
-                # this is because the LLM may get caught in a loop of increasing and decreasing the same state
+            if state in llm_given_states_reduce or state in states_to_reduce_if_present:
+                intensity = max(0, intensity - 1)  # decrease intensity if state is reduced
+            if state in llm_given_states_remove:
+                intensity = 0  # remove state if state is removed
             if intensity > 0:
                 new_applying_states.append([state, intensity, new_decay_rate])
         # now let's add possibly new states from llm_given_states_add and random_states
         for state in llm_given_states_add + random_states:
             if state not in [s[0] for s in new_applying_states]:
                 new_applying_states.append([state, 1, 3])  # add new state with intensity 1
-        for state_to_add_if_not_present in llm_state_to_add_if_not_present:
+        for state_to_add_if_not_present in states_to_add_if_not_present:
             if state_to_add_if_not_present not in [s[0] for s in new_applying_states] and state_to_add_if_not_present not in llm_given_states_reduce:
                 new_applying_states.append([state_to_add_if_not_present, 1, 3])  # add new state with intensity 1
         return new_applying_states
     
     def get_system_instructions(self):
-        common_states = list(self.common_states.keys())
-        common_states_increase_tags = "\n".join([f"{state}_INCREASE" for state in common_states])
-        common_states_decrease_tags = "\n".join([f"{state}_DECREASE" for state in common_states])
-        normal_states = list(self.states.keys())
-        normal_states_increase_tags = "\n".join([f"{state}_INCREASE" for state in normal_states])
-        normal_states_decrease_tags = "\n".join([f"{state}_DECREASE" for state in normal_states])
-        basic_prompt = f"\nYou MUST include one of these phrases or tags at the end of every response" + \
-               "\n\nThe tags to use are:\n" + common_states_increase_tags  + common_states_decrease_tags + normal_states_increase_tags + normal_states_decrease_tags + \
-                "\n\nYou MUST use at most 3 of these tags to reflect changes in the character's emotional and mental state by the end of the conversation."
-        end_prompt = f"You MUST use one of these phrases or tags only if something catastrophic happens:\n" + \
-            "\n".join([f"{state}: {description}" for state, description in self.end_states]) + \
-            "\nYou MUST use these tags only when the story context justifies their application."
-        return basic_prompt + "\n\n" + end_prompt
-    
-    def get_next_applying_states_from_llm_response(
-            self,
-            current_applying_states: list[list[str, int, int]],
-            llm_response: str,
-            states_to_add: set[str],
-            states_to_reduce: set[str],
-        ) -> list[list[str, int, int]]:
-        """Get the next applying states based on the LLM response"""
-        llm_given_states_add = []
-        llm_given_states_reduce = []
-        llm_state_to_add_if_not_present = []
-        for state in self.get_all_states():
-            # use simple tags because the LLM may not follow instructions properly
-            if f"{state}_INCREASE" in llm_response:
-                llm_given_states_add.append(state)
-            if f"{state}_DECREASE" in llm_response:
-                llm_given_states_reduce.append(state)
-            if state in llm_response:
-                llm_state_to_add_if_not_present.append(state)
+        return ""
+        
+        # will disable and make it a post inference task instead, because this confuses the LLM too much
+        #common_states = list(self.common_states.keys())
+        #common_states_increase_tags = "\n".join([f"{state}_INCREASE" for state in common_states])
+        #common_states_decrease_tags = "\n".join([f"{state}_DECREASE" for state in common_states])
+        #normal_states = list(self.states.keys())
+        #normal_states_increase_tags = "\n".join([f"{state}_INCREASE" for state in normal_states])
+        #normal_states_decrease_tags = "\n".join([f"{state}_DECREASE" for state in normal_states])
+        #basic_prompt = f"\nYou MUST include one of these phrases or tags at the end of every response" + \
+        #       "\n\nThe tags to use are:\n" + common_states_increase_tags  + common_states_decrease_tags + normal_states_increase_tags + normal_states_decrease_tags + \
+        #        "\n\nYou MUST use at most 3 of these tags to reflect changes in the character's emotional and mental state by the end of the conversation."
+        #end_prompt = f"You MUST use one of these phrases or tags only if something catastrophic happens:\n" + \
+        #    "\n".join([f"{state}: {description}" for state, description in self.end_states]) + \
+        #    "\nYou MUST use these tags only when the story context justifies their application."
+        #return basic_prompt + "\n\n" + end_prompt
 
-        for state in states_to_add:
-            if state in self.get_all_states() and state not in llm_given_states_add:
-                llm_given_states_add.append(state)
-        for state in states_to_reduce:
-            if state in self.get_all_states() and state not in llm_given_states_reduce:
-                llm_given_states_reduce.append(state)
-                
-        return self.get_next_applying_states(current_applying_states, llm_given_states_add, llm_given_states_reduce, llm_state_to_add_if_not_present)
+    def get_post_inference_system_instructions(self) -> str:
+        """Return the post inference step instructions"""
+        return f"You are an assistant that analyses conversations between {self.character_name} and {self.username}. Your task is to determine which emotional and mental states should be applied to {self.character_name} based on the conversation. " + \
+               f"You will output a list of states to increase and decrease in the following format:\n\n" + \
+               f"Increase: state1, state2, ...\n" + \
+               f"Decrease: state3, state4, ...\n" + \
+               f"Add: state5, state6, ...\n\n" + \
+               f"Remove: state5, state6, ...\n\n" + \
+               f"You MUST separate the states with commas and the lists must be on separate lines. " + \
+               f"Only include states that are relevant to the conversation. " + \
+               f"\n\n{self.character_name} commonly experiences the following states:\n" + \
+               f"{self.format_state_human_readable_list(self.states.keys())}\n\n" + \
+               f"\n\nA list of all possible states:\n" + \
+               f"{self.format_state_human_readable_list(self.get_all_states())}\n\n"
     
-    def llm_response_has_end_state(self, llm_response: str) -> tuple[bool, str]:
-        """Check if the LLM response contains an end state tag, and return the state if found"""
-        for state, description in self.end_states:
-            if f"[[{state}]]" in llm_response:
-                return (True, state, description)
-        return (False, "", "")
+    def get_post_inference_confirmation_prompt(self) -> str:
+        """Return the post inference confirmation prompt"""
+        return "Your analysis MUST be (output ONLY in the exact format):\n\nIncrease: state1, state2, ...\nDecrease: state3, state4, ...\nAdd: state5, state6, ...\n\nRemove: state5, state6, ..."
+    
+    def analyze_response_for_states(self, llm_response: str) -> tuple[list[str], list[str], list[str]]:
+        """Analyze the LLM response to determine which states to increase and decrease"""
+        llm_response = llm_response.lower()
+        increase_states = []
+        decrease_states = []
+        remove_states = []
+
+        all_states = self.get_all_states()
+        all_states_lower = [s.lower() for s in all_states]
+        all_states_human_readable_lower = [self.format_state_human_readable(s).lower() for s in all_states]
+
+        # parse the response for the Increase and Decrease lists
+        lines = llm_response.splitlines()
+        previous_line_was_increase = False
+        previous_line_was_decrease = False
+        previous_line_was_add = False
+        previous_line_was_remove = False
+
+        for line in lines:
+            line = line.strip()
+
+            if not line:
+                continue
+
+            should_increase = "increase" in line and not "decrease" in line and not "add" in line and not "remove" in line
+            should_decrease = ("decrease" in line or "reduce" in line) and not "increase" in line and not "add" in line and not "remove" in line
+            should_add = "add" in line and not "increase" in line and not "decrease" in line and not "remove" in line
+            should_remove = ("remove" in line or "discard" in line) and not "increase" in line and not "decrease" in line and not "add" in line
+
+            if not should_increase and not should_decrease and not should_add and not should_remove:
+                # use the previous line context if available
+                should_increase = previous_line_was_increase
+                should_decrease = previous_line_was_decrease
+                should_add = previous_line_was_add
+                should_remove = previous_line_was_remove
+
+            for index, state in enumerate(all_states_lower):
+                if state in line:
+                    if (should_increase or should_add) and all_states[index] not in increase_states:
+                        increase_states.append(all_states[index])
+                    elif should_decrease and all_states[index] not in decrease_states:
+                        decrease_states.append(all_states[index])
+                    elif should_remove and all_states[index] not in remove_states:
+                        remove_states.append(all_states[index])
+            for index, state in enumerate(all_states_human_readable_lower):
+                if state in line:
+                    if (should_increase or should_add) and all_states[index] not in increase_states:
+                        increase_states.append(all_states[index])
+                    elif should_decrease and all_states[index] not in decrease_states:
+                        decrease_states.append(all_states[index])
+                    elif should_remove and all_states[index] not in remove_states:
+                        remove_states.append(all_states[index])
+
+            if not should_increase and not should_decrease and not should_add and not should_remove:
+                print("Warning: Could not determine if line is for increase, decrease, add, or remove:", line)
+
+            previous_line_was_decrease = should_decrease
+            previous_line_was_increase = should_increase
+            previous_line_was_add = should_add
+            previous_line_was_remove = should_remove
+
+        return increase_states, decrease_states, remove_states
     
     def get_mini_bonuses(self, applied_states: list[list[str, int, int]]) -> int:
-        """Get the number of mini bonuses from the applied states"""
+        """Get the number of mini bond bonuses from the applied states"""
         mini_bonuses = 0
         for state_info in applied_states:
             state = state_info[0]

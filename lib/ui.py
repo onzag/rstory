@@ -43,7 +43,7 @@ def reformat_content(content):
 
 class PrepareLLMThread(QThread):
     """Thread for preparing LLM without blocking UI"""
-    finished_needs_to_be_called_something_else_because = Signal()  # Emits the LLM instance when ready
+    finished_actual = Signal()  # Emits the LLM instance when ready
     error = Signal(str, str)  # Emit error message and traceback
     # Signals for UI updates from worker thread
     showcase_emotion = Signal(str)
@@ -55,14 +55,14 @@ class PrepareLLMThread(QThread):
     def run(self):
         try:
             self.prepare_function()
-            self.finished_needs_to_be_called_something_else_because.emit()
+            self.finished_actual.emit()
         except Exception as e:
             tb = traceback.format_exc()
             self.error.emit(str(e), tb)
 
 class RunInferenceThread(QThread):
     """Thread for running inference without blocking UI"""
-    finished_needs_to_be_called_something_else_because = Signal()
+    finished_actual = Signal()
     error = Signal(str, str)  # Emit error message and traceback
     # Signals for UI updates from worker thread
     character_is_typing = Signal()
@@ -81,7 +81,24 @@ class RunInferenceThread(QThread):
     def run(self):
         try:
             self.run_inference_function(self.user_input, self.dangling_user_message)
-            self.finished_needs_to_be_called_something_else_because.emit()
+            self.finished_actual.emit()
+        except Exception as e:
+            tb = traceback.format_exc()
+            self.error.emit(str(e), tb)
+
+class RunPostInferenceThread(QThread):
+    """Thread for running post-inference tasks without blocking UI, they will need to be awaited for next inference"""
+    finished_actual = Signal()
+    error = Signal(str, str)  # Emit error message and traceback
+    
+    def __init__(self, run_post_inference_function):
+        super().__init__()
+        self.run_post_inference_function = run_post_inference_function
+    
+    def run(self):
+        try:
+            self.run_post_inference_function()
+            self.finished_actual.emit()
         except Exception as e:
             tb = traceback.format_exc()
             self.error.emit(str(e), tb)
@@ -329,6 +346,10 @@ class ChatMessage:
 class ChatWindow(QMainWindow):
     def __init__(self, character_name, initial_chat_history, username):
         super().__init__()
+
+        self.post_inference_thread = None
+        self.inference_thread = None
+
         self.errored = False
         self.character_name = character_name
         self.setWindowTitle("Chat with " + character_name)
@@ -436,6 +457,7 @@ class ChatWindow(QMainWindow):
         """Handle Enter key press in user input box"""
         user_text = self.user_input.toPlainText().strip()
         if user_text:
+            
             if not user_text.startswith("/"):
                 self._add_message_label("user", user_text, scroll_to_bottom=True)
             # clear the user input box
@@ -484,7 +506,7 @@ class ChatWindow(QMainWindow):
 
         # Create and start the prepare thread
         self.prepare_thread = PrepareLLMThread(self.prepare_function)
-        self.prepare_thread.finished_needs_to_be_called_something_else_because.connect(self._on_llm_ready)
+        self.prepare_thread.finished_actual.connect(self._on_llm_ready)
         self.prepare_thread.error.connect(self._on_llm_error)
         self.prepare_thread.showcase_emotion.connect(self._showcase_emotion)
         self.prepare_thread.start()
@@ -507,6 +529,10 @@ class ChatWindow(QMainWindow):
             if dangling_message:
                 # run inference on that message as the history was cut off
                 self.run_inference(dangling_message, True)
+            elif not self.ran_post_inference_last:
+                # unblock chat while we run post inference tasks
+                self.unblock_chat()
+                self.run_post_inference()
             else:
                 self.unblock_chat()
         else:
@@ -523,6 +549,7 @@ class ChatWindow(QMainWindow):
     def run_inference(self, user_input, dangling_user_message):
         if self.ended:
             return  # do not run inference if chat has ended
+        
         # in the same manner as prepare_llm, run inference in another thread
         self.block_chat()
         self.inference_thread = RunInferenceThread(self.run_inference_function, user_input, dangling_user_message, self)
@@ -531,12 +558,17 @@ class ChatWindow(QMainWindow):
         self.inference_thread.character_is_typing.connect(self._character_is_typing)
         self.inference_thread.add_character_text.connect(self._add_character_text)
         self.inference_thread.character_finished_typing.connect(self._character_finished_typing)
-        self.inference_thread.finished_needs_to_be_called_something_else_because.connect(self._on_inference_finished)
+        self.inference_thread.finished_actual.connect(self._on_inference_finished)
         self.inference_thread.error.connect(self._on_inference_error)
         self.inference_thread.showcase_emotion.connect(self._showcase_emotion)
         self.inference_thread.add_system_text.connect(self._add_system_text)
         
-        self.inference_thread.start()
+        # check if there is a post inference thread running and if it is, not start inference
+        # the cleanup of post inference thread will start the next inference if needed
+        # basically we only start the inference thread if there is no post inference thread running
+        # if it is running the post inference thread will start the next inference when it is done
+        if self.post_inference_thread is None:
+            self.inference_thread.start()
 
     @Slot()
     def _character_is_typing(self):
@@ -584,6 +616,33 @@ class ChatWindow(QMainWindow):
             # focus the user input box
             self.user_input.setFocus()
 
+            
+
+    def run_post_inference(self):
+        """Run post inference tasks in background thread"""
+        if self.ended:
+            return  # do not run post inference if chat has ended
+        
+        # call the post inference function in another thread
+        # add message for status about running post inference tasks
+        self.update_status("Running post-inference, do not quit...")
+        self.post_inference_thread = RunPostInferenceThread(self.run_post_inference_function)
+        # reuse as it will block chat on error and that is what we want
+        self.post_inference_thread.error.connect(self._on_inference_error)
+        self.post_inference_thread.finished_actual.connect(self._on_post_inference_finished)  # no action needed on finish
+        self.post_inference_thread.start()
+
+    def _on_post_inference_finished(self):
+        """Called when post inference tasks are finished"""
+        self.post_inference_thread = None  # clean up the thread reference
+        self.update_status("Ready")
+        if not self.ended and not self.errored and self.inference_thread is not None:
+            # start the next inference if needed
+            self.inference_thread.start()
+        else:
+            # if no inference thread, unblock the chat just in case
+            self.unblock_chat()
+
     @Slot(str, str)
     def _on_inference_error(self, error_msg, traceback_str):
         """Called if inference fails"""
@@ -593,15 +652,17 @@ class ChatWindow(QMainWindow):
         # block chat for now
         self.block_chat()
 
-    def run(self, ended, prepare_function, run_inference_function, edit_message_function, delete_message_function, update_username_function):
+    def run(self, ended, ran_post_inference_last, prepare_function, run_inference_function, run_post_inference_function, edit_message_function, delete_message_function, update_username_function):
         """Run chat function in a background thread while UI runs on main thread"""
         # Prepare LLM in another thread
         self.prepare_function = prepare_function
         self.run_inference_function = run_inference_function
+        self.run_post_inference_function = run_post_inference_function
         self.delete_message_function = delete_message_function
         self.edit_message_function = edit_message_function
         self.update_username_function = update_username_function
         self.ended = ended
+        self.ran_post_inference_last = ran_post_inference_last
 
         # first ask the user for their username if not set
         while not self.username:

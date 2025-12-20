@@ -120,11 +120,15 @@ class BondsHandler:
         # this is for checking, we need to check that every status is indicated in each bond file as a line stating <status>: value
         # add "*" to states to indicate general instructions
         states.append("*")
+        # bond change rules
+        states.append("**")
         for min_bond, max_bond in self.bond_texts:
             bond_text = self.bond_texts[(min_bond, max_bond)]
             bond_text_line_splits = bond_text.splitlines()
             for state in states:
                 if not any(line.startswith(f"{state}:") for line in bond_text_line_splits):
+                    if state == "**":
+                        continue  # bond change rules are optional
                     raise ValueError(f"State '{state}' not found in bond range {min_bond} to {max_bond}")
                 
         # also check stranger bond
@@ -132,6 +136,8 @@ class BondsHandler:
         bond_text_line_splits = bond_text.splitlines()
         for state in states:
             if not any(line.startswith(f"{state}:") for line in bond_text_line_splits):
+                if state == "**":
+                    continue  # bond change rules are optional
                 raise ValueError(f"State '{state}' not found in stranger bond")
             
         # also check stranger bad bond
@@ -139,6 +145,8 @@ class BondsHandler:
         bond_text_line_splits = bond_text.splitlines()
         for state in states:
             if not any(line.startswith(f"{state}:") for line in bond_text_line_splits):
+                if state == "**":
+                    continue  # bond change rules are optional
                 raise ValueError(f"State '{state}' not found in stranger bad bond")
 
     def apply_names(self, character_name: str, username: str):
@@ -190,7 +198,13 @@ class BondsHandler:
                 state, value = line.split(":", 1)
                 self.processed_stranger_bad_bond[state.strip()] = value.strip()
 
-    def get_instructions_for_bond(self, bond_value: int, applying_states: list[list[str, int, int]], stranger_bond: bool) -> dict[str, str]:
+    def get_instructions_for_bond(
+        self,
+        bond_value: int,
+        applying_states: list[list[str, int, int]],
+        stranger_bond: bool,
+        for_bond_change: bool = False,
+    ) -> dict[str, str]:
         """Get the bond instructions for the given bond value"""
         processed_bond = None
         if stranger_bond:
@@ -222,7 +236,7 @@ class BondsHandler:
             (3, "Extremely "),
             (4, "Extremely and Overwhelmingly "),
         ]
-        all_instructions = processed_bond.get("*", "")
+        general_instructions = processed_bond.get("*", "")
 
         for state, intensity, decay in applying_states:
             if state in processed_bond:
@@ -239,25 +253,34 @@ class BondsHandler:
                 # check if is is required, check if it ends in s
                 if first_word[-1] == "s":
                     is_added = " "
-                all_instructions += "\n" + self.character_name + is_added + "currently " + intensity_label + state_wordified + ", " + processed_bond[state] + ", to remove this state add the message " + state.upper() + "_DECREASE at the end of the message."
+                general_instructions += "\n" + self.character_name + is_added + "currently " + intensity_label + state_wordified + ", " + processed_bond[state]
 
-        return all_instructions + f"\nYou MUST end answers with INTERACTION_POSITIVE, INTERACTION_NEGATIVE or INTERACTION_NEUTRAL; focus on actions more than conversation, be descriptive, keep the answer at most 3 paragraphs long and do not predict {self.username} nor his reactions, roleplay as {self.character_name} only."
+        if for_bond_change:
+            # add bond change rules instead of telling it to focus on actions
+            bondchangerules = processed_bond.get("**", "")
+            if bondchangerules:
+                general_instructions += "\n" + bondchangerules
+            return general_instructions
+
+        return general_instructions + f"\nFocus on actions more than conversation, be descriptive, keep the answer at most 3 paragraphs long and do not predict {self.username} nor his reactions, roleplay as {self.character_name} only."
         
-    def calculate_bond_change(self, current_bond: float, current_stranger: bool, total_messages_exchanged: int, change: Literal["pos", "neg", "neutral"], minis: int) -> float:
+    def calculate_bond_change(self, current_bond: float, current_stranger: bool, total_messages_exchanged: int, change: int, minis: int) -> float:
         next_bond_amount = current_bond
-        if change == "pos":
-            next_bond_amount += self.bond_climb_rate
+        if change > 0:
+            next_bond_amount += self.bond_climb_rate*change
             if next_bond_amount > 100:
                 next_bond_amount = 100
-        elif change == "neg":
-            next_bond_amount -= self.bond_climb_rate*(self.bond_stranger_negative_bias_multiplier if current_stranger else self.bond_negative_bias_multiplier)
+        elif change < 0:
+            next_bond_amount -= self.bond_climb_rate*(self.bond_stranger_negative_bias_multiplier if current_stranger else self.bond_negative_bias_multiplier)*abs(change)
             if next_bond_amount < -100:
                 next_bond_amount = -100
         else:
             next_bond_amount += self.bond_climb_rate * (self.bond_stranger_neutral_bias_multiplier if current_stranger else self.bond_neutral_bias_multiplier)
 
         # add the mini bonuses, that count as neutral interactions
-        next_bond_amount += minis * self.bond_climb_rate * (self.bond_stranger_neutral_bias_multiplier if current_stranger else self.bond_neutral_bias_multiplier)
+        if change != "neg":
+            # mini bonuses only apply to positive and neutral interactions
+            next_bond_amount += minis * self.bond_climb_rate * (self.bond_stranger_neutral_bias_multiplier if current_stranger else self.bond_neutral_bias_multiplier)
 
         next_stranger = current_stranger
         if current_stranger:
@@ -271,15 +294,38 @@ class BondsHandler:
         return next_bond_amount, next_stranger
     
     def get_system_instructions(self) -> str:
-        return f"You MUST include one of these at the end of the reply:\nINTERACTION_POSITIVE\nINTERACTION_NEGATIVE\nINTERACTION_NEUTRAL\n\nThis specifies whether the interaction was positive, negative or neutral and grows or shrinks the bond accordingly"
+        return ""
+        # removed because it was making the LLM be confused, we will add it as a post-inference step instead
+
+    def get_post_inference_system_instructions(self) -> str:
+        """Return the post inference step instructions"""
+        return f"You are an assistant that analyses conversations between {self.character_name} and {self.username}." + \
+            "\n\nYou MUST respond with:\n\n*The interaction was Positive*\n*The interaction was Negative*\n*The interaction was very Positive*\n*The interaction was very Negative*\n*The interaction was extremely Positive*\n*The interaction was extremely Negative*\n*The interaction was Neutral*" + \
+            "\n\nExactly those phrases, only output one; on whether the interaction was positive, negative or neutral, consider the tone, content, and emotional context of the message in your analysis."
     
-    def calculate_bond_change_from_message(self, current_bond: float, current_stranger: bool, total_messages_exchanged: int, message: str, minis: int) -> tuple[float, bool]:
-        """Find the INTERACTION_POSITIVE, INTERACTION_NEGATIVE, or INTERACTION_NEUTRAL tag in the message and calculate the bond change accordingly"""
-        change = "neutral"
-        # just grab the text because of issues with the LLM sometimes not following instructions properly
-        if "INTERACTION_POSITIVE" in message:
-            change = "pos"
-        elif "INTERACTION_NEGATIVE" in message:
-            change = "neg"
+    def get_post_inference_confirmation_prompt(self) -> str:
+        """Return the post inference confirmation prompt"""
+        return "Your classification (output ONLY one of the exact phrases): *The interaction was Positive* | *The interaction was Negative* | *The interaction was very Positive* | *The interaction was very Negative* | *The interaction was extremely Positive* | *The interaction was extremely Negative* | *The interaction was Neutral*"
+    
+    def calculate_bond_change_from_post_inference(self, current_bond: float, current_stranger: bool, total_messages_exchanged: int, post_inference_response: str, minis: int) -> float:
+        """Calculate the bond change from the post inference response"""
+        response_lower = post_inference_response.lower()
+        change = 0
+        if "positive" in response_lower:
+            change = 1
+        elif "negative" in response_lower:
+            change = -1
+        elif "neutral" in response_lower:
+            change = 0
+        else:
+            print("Warning: Unable to determine bond change from post inference response, defaulting to neutral.")
+            # default to neutral if we cannot determine
+            change = 0
+
+        if "very" in response_lower:
+            change *= 2
+        # we will use extreme and overwhelm because LLM potential typographical errors
+        elif "extreme" in response_lower or "overwhelm" in response_lower:
+            change *= 3
 
         return self.calculate_bond_change(current_bond, current_stranger, total_messages_exchanged, change, minis)
