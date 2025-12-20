@@ -1,6 +1,6 @@
 # RStory
 
-\*Onza was shown some online LLM roleplay bot, for a while he played with such toy and then though to himself\* Well why not make it better as these bots are led so easily to do whatever you want and have no resistance whatsoever *\So he began making a different bot system, one that shown more emotion behaviours and connections, but his poor gaming machine could barely cope and he had to be creative to make something that worked even with a SLM\*
+\*Onza was shown some online LLM roleplay bot, for a while he played with such toy and then though to himself\* Well why not make it better as these bots are led so easily to do whatever you want and have no resistance whatsoever \*So he began making a different bot system, one that shown more emotion behaviours and connections, but his poor gaming machine could barely cope and he had to be creative to make something that worked even with a SLM\*
 
 \*As he drove his bicycle to work while it was raining he figured out a way to make the SLM have evolving behaviour\* Oh like the SIMS 2 \*And he came home an idea to make a small chatbot that actually could hate on the user, or love it depending how they were acting and not bend to the will of the user easily\*
 
