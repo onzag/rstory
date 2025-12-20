@@ -203,7 +203,7 @@ def prepare_token_cache():
     for key in CACHE_TOKENS:
         CACHE_TOKENS[key]["used_in_last_count"] = False
 
-def format_prompt(history, max_context=6000, special_instructions=""):
+def format_prompt(history, max_context=6000, special_instructions="", special_instructions_in_assistant_space=False):
     """Format the conversation history with proper role tags for Llama 3.3
     Uses sliding window to keep only recent messages that fit in context.
     Reserves space for system prompt, new message, and response generation.
@@ -217,17 +217,25 @@ def format_prompt(history, max_context=6000, special_instructions=""):
     end_prompt = "<|start_header_id|>assistant<|end_header_id|>\n\n"
     
     # Format the new user message
-    if special_instructions:
-        special_instructions = f"<|start_header_id|>user<|end_header_id|>\n\n*{special_instructions}*<|eot_id|>"
+    special_instructions_user = ""
+    assistant_start = ""
+    if special_instructions and not special_instructions_in_assistant_space:
+        special_instructions_user = f"<|start_header_id|>user<|end_header_id|>\n\n*{special_instructions}*<|eot_id|>"
+    elif special_instructions and special_instructions_in_assistant_space:
+        assistant_start = f"*{special_instructions}*\n"
     
     # Count tokens for system and user parts (reserve space)
     system_tokens = count_tokens(system_part)
-    special_instructions_tokens = 0
-    if special_instructions:
-        special_instructions_tokens = count_tokens(special_instructions)
+    special_instructions_user_tokens = 0
+    assistant_start_tokens = 0
+    if special_instructions_user:
+        special_instructions_user_tokens = count_tokens(special_instructions_user)
+    if assistant_start:
+        assistant_start_tokens = count_tokens(assistant_start)
+    
     end_prompt_tokens = count_tokens(end_prompt)
-    available_tokens = max_context - system_tokens - special_instructions_tokens - end_prompt_tokens
-        
+    available_tokens = max_context - system_tokens - special_instructions_user_tokens - end_prompt_tokens - assistant_start_tokens
+    
     # Build history from most recent messages backwards
     history_parts = []
     token_count = 0
@@ -254,14 +262,15 @@ def format_prompt(history, max_context=6000, special_instructions=""):
         token_count += msg_tokens
 
     # wedge special instructions one before history
-    if special_instructions:
-        history_parts.insert(len(history_parts) - 1, special_instructions)
-        token_count += special_instructions_tokens
+    if special_instructions_user:
+        history_parts.insert(len(history_parts) - 1, special_instructions_user)
+        token_count += special_instructions_user_tokens
 
     token_count += system_tokens
+    token_count += assistant_start_tokens
 
     # Combine all parts
-    prompt = system_part + "".join(history_parts) + end_prompt
+    prompt = system_part + "".join(history_parts) + end_prompt + assistant_start
 
     print(prompt)
         
@@ -329,6 +338,9 @@ print("Loading Llama model...")
 
 def prepare_llm():
     # during this call we got the username from the chat window already so we will use that
+    global SYSTEM_PROMPT
+    # replace {char} and {user} in system prompt too
+    SYSTEM_PROMPT = SYSTEM_PROMPT.replace("{{char}}", character_name_value).replace("{{user}}", chat_window.username)
     bonds_handler.apply_names(character_name_value, chat_window.username)
     states_handler.apply_names(character_name_value, chat_window.username)
     emotion_handler.apply_names(character_name_value, chat_window.username, character_pronouns=character_pronouns_value)
@@ -521,17 +533,24 @@ def run_inference(user_input, dangling_user_message):
     global current_stranger
     global current_ended
     global ran_post_inference_last
-    system_prompt_for_end = "*" + bonds_handler.get_instructions_for_bond(
+
+    is_dead_end_due_to_bond = bonds_handler.is_bond_dead_end(
+        current_bond_weight,
+        current_stranger,
+    )
+
+    system_prompt_for_end = bonds_handler.get_instructions_for_bond(
         current_bond_weight,
         current_applied_states,
         current_stranger,
-    ) + "*\n"
+    )
     
     # Format the prompt with history
     prompt = format_prompt(
         chat_history,
         max_context=CONTEXT_WINDOW_SIZE - 512,
-        special_instructions=system_prompt_for_end
+        special_instructions=system_prompt_for_end,
+        special_instructions_in_assistant_space=is_dead_end_due_to_bond is not None,
     )
 
     # Generate response
@@ -579,6 +598,7 @@ def run_inference(user_input, dangling_user_message):
                     if state_name in states_triggered_add:
                         states_triggered_add.remove(state_name)
             response += text
+            print(text, end="", flush=True)
         next_message = json.loads(ws.recv())
 
     ws.close()
@@ -598,9 +618,22 @@ def run_inference(user_input, dangling_user_message):
     chat_history.append({"role": "assistant", "content": response.strip()})
     ran_post_inference_last = False
     chat_history_all["ran_post_inference_last"] = ran_post_inference_last
+
+    if is_dead_end_due_to_bond:
+        print(f"End state detected from post inference: {is_dead_end_due_to_bond}")
+        ended_readable = states_handler.format_end_state_human_readable(is_dead_end_due_to_bond)
+        chat_window.character_finished_typing(ended_readable)
+        chat_history_all["ended"] = ended_readable
+        current_ended = ended_readable
+        save_conversation_log()
+    else:
+        chat_window.character_finished_typing(None)
+
+    if not is_dead_end_due_to_bond:
+        chat_window.update_status("Ready for next message.")
+
     save_conversation_log()
 
-    chat_window.update_status("Ready for next message.")
 
 def edit_message(index, new_content):
     """Edit a message in the chat history and save the log"""
@@ -722,16 +755,6 @@ def run_post_inference():
     new_applied_states_add, new_applied_states_decrease, new_applied_states_remove = states_handler.analyze_response_for_states(
         post_inference_state_response,
     )
-
-    # TODO restore end state detection
-    #if end_state:
-    #    print(f"End state detected from post inference: {end_state}")
-    #    chat_window.character_finished_typing(end_tag_found[2])
-    #    chat_history_all["ended"] = end_tag_found[2]
-    #    current_ended = end_tag_found[2]
-    #     save_conversation_log()
-    #else:
-    #    chat_window.character_finished_typing(None)
 
     new_applied_states = states_handler.get_next_applying_states(
         current_applied_states,

@@ -9,7 +9,6 @@ import traceback
 def format_content(content):
     """Format content for display in QLabel (supports basic HTML)"""
     # we will replace newlines with <br> for HTML display
-    content = content.replace("\n", "<br>")
     # we need to also find asterisks for bold which start the bold text and then find where it ends at the next asterisk
     formatted = ""
     bold = False
@@ -29,6 +28,9 @@ def format_content(content):
             i += 1
         elif content[i] == ">":
             formatted += "&gt;"
+            i += 1
+        elif content[i] == "\n":
+            formatted += "<br>"
             i += 1
         else:
             formatted += content[i]
@@ -144,7 +146,10 @@ class ChatMessage:
 
         if role == "user" or role == "assistant":
             self.label.setTextFormat(QtCore.Qt.RichText)
-            self.label.setText(format_content(content))
+            if uninitialized:
+                self.label.setText("<i>" + format_content(content) + "</i>")
+            else:
+                self.label.setText(format_content(content))
         else:
             self.label.setTextFormat(QtCore.Qt.PlainText)
             self.label.setText(content)
@@ -582,7 +587,7 @@ class ChatWindow(QMainWindow):
     def _character_is_typing(self):
         """Slot called from worker thread - safe for UI updates"""
         # this basically means to add a new entry with empty text for the assistant
-        self._add_message_label("assistant", "<i>" + self.character_name + " is answering...</i>", scroll_to_bottom=True, uninitialized=True)
+        self._add_message_label("assistant", self.character_name + " is answering...", scroll_to_bottom=True, uninitialized=True)
     
     @Slot(str)
     def _add_character_text(self, text):

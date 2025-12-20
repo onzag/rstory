@@ -124,6 +124,9 @@ class BondsHandler:
         states.append("**")
         for min_bond, max_bond in self.bond_texts:
             bond_text = self.bond_texts[(min_bond, max_bond)]
+            if bond_text[0] == "!":
+                continue  # exceptional bond, skip checking
+
             bond_text_line_splits = bond_text.splitlines()
             for state in states:
                 if not any(line.startswith(f"{state}:") for line in bond_text_line_splits):
@@ -178,10 +181,18 @@ class BondsHandler:
             bond_text = self.bond_texts[(min_bond, max_bond)]
             bond_lines = bond_text.splitlines()
             bond_dict = {}
+            exceptional = False
             for line in bond_lines:
-                if ":" in line:
+                if line[0] == "!":
+                    exceptional = True
+                    if ":" in line:
+                        state, value = line[1:].split(":", 1)
+                        bond_dict[state.strip()] = value.strip()
+                elif ":" in line and not exceptional:
                     state, value = line.split(":", 1)
                     bond_dict[state.strip()] = value.strip()
+                elif exceptional:
+                    bond_dict["dead_end"] = line.strip()
             self.processed_bonds[(min_bond, max_bond)] = bond_dict
 
         self.processed_stranger_bond = {}
@@ -197,6 +208,16 @@ class BondsHandler:
             if ":" in line:
                 state, value = line.split(":", 1)
                 self.processed_stranger_bad_bond[state.strip()] = value.strip()
+
+    def is_bond_dead_end(self, bond_value: int, stranger_bond: bool) -> str:
+        """Check if the current bond is a dead end bond"""
+        if stranger_bond:
+            return None
+        for min_bond, max_bond in self.processed_bonds:
+            if bond_value >= min_bond and bond_value < max_bond:
+                processed_bond = self.processed_bonds[(min_bond, max_bond)]
+                return processed_bond.get("dead_end", None)
+        return None
 
     def get_instructions_for_bond(
         self,
@@ -227,6 +248,10 @@ class BondsHandler:
         if processed_bond is None:
             print(f"Warning: No bond instructions found for bond value {bond_value}")
             return ""
+        
+        if processed_bond.get("!", None):
+            print(f"Warning: Bond instructions for bond value {bond_value} is marked as dead end")
+            return processed_bond["!"]
         
         # now we want to get the instructions for the applying states
         intensity_labels = [
@@ -263,9 +288,9 @@ class BondsHandler:
             return general_instructions
 
         return general_instructions + f"\n\nBe very descriptive" + \
-            "\n\nIMPORTANT: Keep your response 3 paragraphs maximum. Do NOT write actions or dialogue for {self.username}. Only roleplay as {self.character_name}."
+            f"\n\nIMPORTANT: Keep your response 3 paragraphs maximum. Do NOT write actions or dialogue for {self.username}. Only roleplay as {self.character_name}."
         
-    def calculate_bond_change(self, current_bond: float, current_stranger: bool, total_messages_exchanged: int, change: int, minis: int) -> float:
+    def calculate_bond_change(self, current_bond: float, current_stranger: bool, total_messages_exchanged: int, change: int, minis: int) -> tuple[float, bool]:
         next_bond_amount = current_bond
         if change > 0:
             next_bond_amount += self.bond_climb_rate*change
@@ -308,7 +333,7 @@ class BondsHandler:
         """Return the post inference confirmation prompt"""
         return "Your classification (output ONLY one of the exact phrases): *The interaction was Positive* | *The interaction was Negative* | *The interaction was very Positive* | *The interaction was very Negative* | *The interaction was extremely Positive* | *The interaction was extremely Negative* | *The interaction was Neutral*"
     
-    def calculate_bond_change_from_post_inference(self, current_bond: float, current_stranger: bool, total_messages_exchanged: int, post_inference_response: str, minis: int) -> float:
+    def calculate_bond_change_from_post_inference(self, current_bond: float, current_stranger: bool, total_messages_exchanged: int, post_inference_response: str, minis: int) -> tuple[float, bool]:
         """Calculate the bond change from the post inference response"""
         response_lower = post_inference_response.lower()
         change = 0

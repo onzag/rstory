@@ -63,7 +63,7 @@ def read_states_list(states_path: str) -> list[str]:
 
     return (state_rates, state_rates_common, plus_states)
 
-def read_end_states_list(end_states_path: str) -> list[(str, str)]:
+def read_end_states_list(end_states_path: str) -> list[tuple[str, str]]:
     """Read the list of end states from the given file path"""
     with open(end_states_path, "r", encoding="utf-8") as f:
         end_states = [line.strip() for line in f if line.strip() and not line.startswith("#")]
@@ -88,13 +88,14 @@ def read_end_states_list(end_states_path: str) -> list[(str, str)]:
 
     return end_states
 
-
 class StatesHandler:
     def __init__(self, general_path: str):
         self.general_path = general_path
         # load states from the states.txt file
         self.states, self.common_states, self.plus_states = read_states_list(path.join(general_path, "states.txt"))
         self.end_states = read_end_states_list(path.join(general_path, "end_states.txt"))
+
+        self.get_states_with_random_odds()
 
         self.llm_previously_applied_state_with_random_odd = {}
 
@@ -119,7 +120,7 @@ class StatesHandler:
     def get_states_with_random_odds(self) -> list[str]:
         """Get a list of states that have random spawn odds"""
         applied_states = []
-        for state, rate in self.states.items():
+        for state, rate in list(self.states.items()) + list(self.common_states.items()):
             if rate > 0.0:
                 applied_states.append(state)
         return applied_states
@@ -128,10 +129,10 @@ class StatesHandler:
         """Reroll the states that were previously applied by the LLM with random odds
         removes them based on their spawn rates"""
         for state in list(self.llm_previously_applied_state_with_random_odd.keys()):
-            rate = self.states.get(state, 0.0)
+            rate = self.states.get(state, self.common_states.get(state, 0.0))
             # double the likelihood of it being removed
             # so the LLM can trigger it again more easily
-            if (random.random() * 2) >= rate:
+            if (random.random() / 2) >= rate:
                 if state in self.llm_previously_applied_state_with_random_odd:
                     print("Freed LLM previously applied state with random odd: ", state)
                     del self.llm_previously_applied_state_with_random_odd[state]
@@ -154,6 +155,13 @@ class StatesHandler:
     def format_state_human_readable_list(self, states: list[str]) -> str:
         """Format a list of states to be more human readable"""
         return ", ".join([self.format_state_human_readable(state) for state in states])
+    
+    def format_end_state_human_readable(self, state: str) -> str:
+        """Format an end state to be more human readable, they actually have a description in the end_states list"""
+        for end_state, description in self.end_states:
+            if end_state == state:
+                return description
+        return state
     
     def get_next_applying_states(
             self,
@@ -178,6 +186,7 @@ class StatesHandler:
                     llm_given_states_add.remove(state)
                 else:
                     # we allow it and mark it as previously applied
+                    print(f"Allowed LLM request to add state with random odds: {state}")
                     self.llm_previously_applied_state_with_random_odd[state] = True
 
         new_applying_states = []
@@ -206,10 +215,11 @@ class StatesHandler:
                 new_applying_states.append([state, intensity, new_decay_rate])
         # now let's add possibly new states from llm_given_states_add and random_states
         for state in llm_given_states_add + random_states:
-            if state not in [s[0] for s in new_applying_states]:
+            if state not in [s[0] for s in new_applying_states] and state not in llm_given_states_remove and state not in llm_given_states_reduce:
                 new_applying_states.append([state, 1, 3])  # add new state with intensity 1
         for state_to_add_if_not_present in states_to_add_if_not_present:
-            if state_to_add_if_not_present not in [s[0] for s in new_applying_states] and state_to_add_if_not_present not in llm_given_states_reduce:
+            if state_to_add_if_not_present not in [s[0] for s in new_applying_states] and \
+                state_to_add_if_not_present not in llm_given_states_reduce and state_to_add_if_not_present not in llm_given_states_remove:
                 new_applying_states.append([state_to_add_if_not_present, 1, 3])  # add new state with intensity 1
         return new_applying_states
     
@@ -235,12 +245,10 @@ class StatesHandler:
         """Return the post inference step instructions"""
         return f"You are an assistant that analyses conversations between {self.character_name} and {self.username}. Your task is to determine which emotional and mental states should be applied to {self.character_name} based on the conversation. " + \
                f"You will output a list of states to increase and decrease in the following format:\n\n" + \
-               f"Increase: state1, state2, ...\n" + \
-               f"Decrease: state3, state4, ...\n" + \
-               f"Add: state5, state6, ...\n\n" + \
-               f"Remove: state5, state6, ...\n\n" + \
+               f"Increase: state1, state2\n" + \
+               f"Decrease: state3, state4\n" + \
                f"You MUST separate the states with commas and the lists must be on separate lines. " + \
-               f"Only include states that are relevant to the conversation. " + \
+               f"Only include states that are relevant to the conversation, do not add more than 2 states at a time " + \
                f"\n\n{self.character_name} commonly experiences the following states:\n" + \
                f"{self.format_state_human_readable_list(self.states.keys())}\n\n" + \
                f"\n\nA list of all possible states:\n" + \
@@ -248,7 +256,7 @@ class StatesHandler:
     
     def get_post_inference_confirmation_prompt(self) -> str:
         """Return the post inference confirmation prompt"""
-        return "Your analysis MUST be (output ONLY in the exact format):\n\nIncrease: state1, state2, ...\nDecrease: state3, state4, ...\nAdd: state5, state6, ...\n\nRemove: state5, state6, ..."
+        return "Your analysis MUST be (output ONLY in the exact format):\n\nIncrease: state1, state2, ...\nDecrease: state3, state4, ..."
     
     def analyze_response_for_states(self, llm_response: str) -> tuple[list[str], list[str], list[str]]:
         """Analyze the LLM response to determine which states to increase and decrease"""
@@ -318,6 +326,8 @@ class StatesHandler:
             previous_line_was_add = should_add
             previous_line_was_remove = should_remove
 
+        # remove will literally be always empty because LLM limitations as it has been taken away from the prompt
+        # but it could happen, it's a LLM kinda unpredictable thing
         return increase_states, decrease_states, remove_states
     
     def get_mini_bonuses(self, applied_states: list[list[str, int, int]]) -> int:
