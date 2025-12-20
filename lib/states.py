@@ -96,6 +96,8 @@ class StatesHandler:
         self.states, self.common_states, self.plus_states = read_states_list(path.join(general_path, "states.txt"))
         self.end_states = read_end_states_list(path.join(general_path, "end_states.txt"))
 
+        self.llm_previously_applied_state_with_random_odd = {}
+
         print(f"Loaded {len(self.states) + len(self.common_states)} states, {len(self.common_states)} common states.")
 
     def get_all_states(self) -> list[str]:
@@ -113,6 +115,26 @@ class StatesHandler:
             if random.random() < rate:
                 applied_states.append(state)
         return applied_states
+    
+    def get_states_with_random_odds(self) -> list[str]:
+        """Get a list of states that have random spawn odds"""
+        applied_states = []
+        for state, rate in self.states.items():
+            if rate > 0.0:
+                applied_states.append(state)
+        return applied_states
+    
+    def reroll_llm_previously_applied_state_with_random_odd(self):
+        """Reroll the states that were previously applied by the LLM with random odds
+        removes them based on their spawn rates"""
+        for state in list(self.llm_previously_applied_state_with_random_odd.keys()):
+            rate = self.states.get(state, 0.0)
+            # double the likelihood of it being removed
+            # so the LLM can trigger it again more easily
+            if (random.random() * 2) >= rate:
+                if state in self.llm_previously_applied_state_with_random_odd:
+                    print("Freed LLM previously applied state with random odd: ", state)
+                    del self.llm_previously_applied_state_with_random_odd[state]
     
     def apply_names(self, character_name: str, username: str):
         self.character_name = character_name
@@ -144,6 +166,20 @@ class StatesHandler:
         ) -> list[list[str, int, int]]:
         """Get a list of states that are currently applying based on their durations"""
         random_states = self.get_random_applied_states()
+
+        states_with_random_odds = self.get_states_with_random_odds()
+        self.reroll_llm_previously_applied_state_with_random_odd()
+        for state in states_with_random_odds:
+            if state in llm_given_states_add:
+                # we want to be very careful when the LLM wants to add a state that has random odds
+                if state in self.llm_previously_applied_state_with_random_odd:
+                    # we deny it
+                    print(f"Denied LLM request to add state with random odds again: {state}")
+                    llm_given_states_add.remove(state)
+                else:
+                    # we allow it and mark it as previously applied
+                    self.llm_previously_applied_state_with_random_odd[state] = True
+
         new_applying_states = []
         for state_info in current_applying_states:
             state = state_info[0]
@@ -162,7 +198,8 @@ class StatesHandler:
                 if intensity > 4:
                     intensity = 4  # cap intensity at 4
             if state in llm_given_states_reduce or state in states_to_reduce_if_present:
-                intensity = max(0, intensity - 1)  # decrease intensity if state is reduced
+                # we will remove altogether because the AI seems to struggle with reducing intensity properly
+                intensity = 0
             if state in llm_given_states_remove:
                 intensity = 0  # remove state if state is removed
             if intensity > 0:
@@ -236,6 +273,13 @@ class StatesHandler:
 
             if not line:
                 continue
+
+            # check for invalid lines that seem to be roleplay or narrative
+            invalid_indicators = ["i feel", "i am", "my", "me", "he", "she", "it", "you", "asks", "says"]
+            spaced_line = " " + line + " "
+            if any(" " + indicator + " " in spaced_line for indicator in invalid_indicators):
+                print("Warning: Skipping potential invalid line in state analysis:", line)
+                continue  # skip this line
 
             should_increase = "increase" in line and not "decrease" in line and not "add" in line and not "remove" in line
             should_decrease = ("decrease" in line or "reduce" in line) and not "increase" in line and not "add" in line and not "remove" in line

@@ -262,7 +262,8 @@ class BondsHandler:
                 general_instructions += "\n" + bondchangerules
             return general_instructions
 
-        return general_instructions + f"\nFocus on actions more than conversation, be descriptive, keep the answer at most 3 paragraphs long and do not predict {self.username} nor his reactions, roleplay as {self.character_name} only."
+        return general_instructions + f"\n\nBe very descriptive" + \
+            "\n\nIMPORTANT: Keep your response 3 paragraphs maximum. Do NOT write actions or dialogue for {self.username}. Only roleplay as {self.character_name}."
         
     def calculate_bond_change(self, current_bond: float, current_stranger: bool, total_messages_exchanged: int, change: int, minis: int) -> float:
         next_bond_amount = current_bond
@@ -278,9 +279,9 @@ class BondsHandler:
             next_bond_amount += self.bond_climb_rate * (self.bond_stranger_neutral_bias_multiplier if current_stranger else self.bond_neutral_bias_multiplier)
 
         # add the mini bonuses, that count as neutral interactions
-        if change != "neg":
+        if change >= 0:
             # mini bonuses only apply to positive and neutral interactions
-            next_bond_amount += minis * self.bond_climb_rate * (self.bond_stranger_neutral_bias_multiplier if current_stranger else self.bond_neutral_bias_multiplier)
+            next_bond_amount += (minis * self.bond_climb_rate * (self.bond_stranger_neutral_bias_multiplier if current_stranger else self.bond_neutral_bias_multiplier))
 
         next_stranger = current_stranger
         if current_stranger:

@@ -12,8 +12,8 @@ import websocket
 
 CONTEXT_WINDOW_SIZE = 8192
 REPEAT_PENALTY = 1.1
-FREQUENCY_PENALTY = 0.5
-PRESENCE_PENALTY = 0.5
+FREQUENCY_PENALTY = 0.0
+PRESENCE_PENALTY = 0.0
 TEMPERATURE = 1.0
 TOP_P = 0.9
 
@@ -77,6 +77,8 @@ def load_settings():
             PRESENCE_PENALTY = settings.get("presence_penalty", PRESENCE_PENALTY)
             TEMPERATURE = settings.get("temperature", TEMPERATURE)
             TOP_P = settings.get("top_p", TOP_P)
+
+            print("Settings loaded from", settings_path, ":", settings)
 
 load_settings()
 save_settings()
@@ -338,6 +340,10 @@ def prepare_llm():
     SYSTEM_PROMPT_STATES = states_handler.get_system_instructions()
     SYSTEM_PROMPT_BONDS = bonds_handler.get_system_instructions()
 
+    global LAST_STATES_TRIGGERED_ADD
+    global LAST_STATES_TRIGGERED_DISCARD
+    global LAST_EMOTIONS_TRIGGERED
+
     chat_window.update_status("Loading model...")
 
     # start with neutral emotion
@@ -348,19 +354,40 @@ def prepare_llm():
             last_message = msg
             break
     if last_message is not None:
+        states_triggered_add = set([])
+        states_triggered_discard = set([])
+        emotions_triggered = set([])
         emotion_handler.restart_rolling_emotions()
         # split the message into words to simuate rolling tokens
         last_emotion = None
         for word in last_message["content"].split():
-            last_emotion_given, _ = emotion_handler.process_rolling_token(word + " ")
+            last_emotion_given, last_states_triggered = emotion_handler.process_rolling_token(word + " ")
             if last_emotion_given is not None:
                 last_emotion = last_emotion_given
+                emotions_triggered.add(last_emotion_given)
+            for state in last_states_triggered:
+                sign = state[0]
+                state_name = state[1]
+                if sign == "+":
+                    states_triggered_add.add(state_name)
+                    if state_name in states_triggered_discard:
+                        states_triggered_discard.remove(state_name)
+                elif sign == "-":
+                    states_triggered_discard.add(state_name)
+                    if state_name in states_triggered_add:
+                        states_triggered_add.remove(state_name)
         if last_emotion is None:
             last_emotion = "neutral"
             print("No emotion detected in previous assistant message, starting with neutral emotion.")
         else:
             print(f"Previous assistant message found, starting with emotion: {last_emotion}")
         chat_window.showcase_emotion_from_prepare(last_emotion)
+        LAST_STATES_TRIGGERED_ADD = states_triggered_add
+        LAST_STATES_TRIGGERED_DISCARD = states_triggered_discard
+        LAST_EMOTIONS_TRIGGERED = emotions_triggered
+
+        print("States carried over from previous message - Added:", states_triggered_add, "Discarded:", states_triggered_discard)
+
     else:
         chat_window.showcase_emotion_from_prepare("neutral")
         print("No previous assistant message found, starting with neutral emotion.")
@@ -519,9 +546,9 @@ def run_inference(user_input, dangling_user_message):
     action = {
         "action": "generate",
         "prompt": prompt,
-        "max_tokens": 8192,
+        "max_tokens": 512,
         "stream": True,
-        "stop": ["<|eot_id|>", "<|start_header_id|>"],
+        "stop": ["<|eot_id|>", "<|start_header_id|>", f"\n{chat_window.username}:", f"\n{chat_window.username.lower()}:"],
         "repeat_penalty": REPEAT_PENALTY,           # Penalize repetitions (1.0 = no penalty, higher = more penalty)
         "frequency_penalty": FREQUENCY_PENALTY,        # Reduce likelihood of frequently used tokens
         "presence_penalty": PRESENCE_PENALTY,          # Encourage new topics/ideas
@@ -590,6 +617,8 @@ def delete_message(index):
 def run_post_inference():
     """Function to run after inference is complete (if needed)"""
 
+    print("Running post inference analysis...")
+
     global LAST_EMOTIONS_TRIGGERED
     global LAST_STATES_TRIGGERED_ADD
     global LAST_STATES_TRIGGERED_DISCARD
@@ -618,9 +647,9 @@ def run_post_inference():
     action = {
         "action": "generate",
         "prompt": post_bond_analysis_prompt,
-        "max_tokens": 128,
+        "max_tokens": 24,
         "stream": True,
-        "stop": ["<|eot_id|>", "<|start_header_id|>"],
+        "stop": ["<|eot_id|>", "<|start_header_id|>", "\n"],
 
         # different settings for this as we want a more focused response
         "repeat_penalty": 1.0,           # No repeat penalty
@@ -662,7 +691,7 @@ def run_post_inference():
     action = {
         "action": "generate",
         "prompt": post_inference_state_prompt,
-        "max_tokens": 1024,
+        "max_tokens": 64,
         "stream": True,
         # default ones
         "stop": ["<|eot_id|>", "<|start_header_id|>"],

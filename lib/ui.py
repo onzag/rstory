@@ -23,6 +23,13 @@ def format_content(content):
                 formatted += "<b>"
                 bold = True
             i += 1
+        elif content[i] == "<":
+            # escape HTML tags
+            formatted += "&lt;"
+            i += 1
+        elif content[i] == ">":
+            formatted += "&gt;"
+            i += 1
         else:
             formatted += content[i]
             i += 1
@@ -190,9 +197,9 @@ class ChatMessage:
     def is_uninitialized(self):
         return self.uninitialized
     
-    def setText(self, text):
-        self.plain_text = text
-        self.label.setText(format_content(text))
+    def setText(self, new_plain_text):
+        self.plain_text = new_plain_text
+        self.label.setText(format_content(new_plain_text))
 
     def reIndex(self, new_index):
         self.index = new_index
@@ -204,6 +211,7 @@ class ChatMessage:
 
             # replace the label with a QTextEdit
             self.text_edit = QtWidgets.QTextEdit()
+            # make text_edit plain text
             self.text_edit.setPlainText(self.plain_text)
             self.text_edit.setStyleSheet("background-color: #fff3cd; padding: 5px; border-radius: 5px;")
             
@@ -273,7 +281,7 @@ class ChatMessage:
         """Finish edit mode and save changes"""
         if self.editing:
             new_text = self.text_edit.toPlainText()
-            self.setText(format_content(new_text))
+            self.setText(new_text)
 
             self.editing = False
 
@@ -610,13 +618,17 @@ class ChatWindow(QMainWindow):
 
     @Slot()
     def _on_inference_finished(self):
+        # clean up the thread reference
+        # prevent it from restarting again
+        self.inference_thread = None
+
         """Called when inference is finished"""
         if not self.ended and not self.errored:
             self.unblock_chat()
             # focus the user input box
             self.user_input.setFocus()
 
-            
+            self.run_post_inference()
 
     def run_post_inference(self):
         """Run post inference tasks in background thread"""
