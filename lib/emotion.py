@@ -98,7 +98,7 @@ def get_emotion_alternatives(emotion: str, all_emotions_expanded: set[str]) -> s
         ["excited", "enthusiastic", "eager", "thrilled"],
         ["bored", "uninterested", "weary", "apathetic"],
         ["confused", "perplexed", "baffled", "puzzled"],
-        ["loving", "affectionate", "fond", "adoring"],
+        ["loving", "affectionate", "adoring"],
         ["hating", "detest", "loathe", "despise"],
         ["proud", "pleased", "satisfied", "accomplished"],
         ["ashamed", "guilty", "embarrassed", "regretful"],
@@ -112,7 +112,7 @@ def get_emotion_alternatives(emotion: str, all_emotions_expanded: set[str]) -> s
         ["hopeful", "optimistic", "expectant", "positive"],
         ["frustrated", "irritated", "annoyed", "exasperated"],
         ["determined", "resolute", "steadfast", "persistent"],
-        ["sympathetic", "compassionate", "understanding", "caring"],
+        ["sympathetic", "compassionate", "understanding"],
         ["guilty", "remorseful", "regretful", "contrite"],
         ["relieved", "comforted", "reassured", "soothed"],
         ["embarrassed", "ashamed", "self-conscious", "flustered"],
@@ -122,7 +122,7 @@ def get_emotion_alternatives(emotion: str, all_emotions_expanded: set[str]) -> s
         ["anxious", "nervous", "uneasy", "worried"],
         ["enthusiastic", "excited", "eager", "zealous"],
         ["apathetic", "indifferent", "uninterested", "detached"],
-        ["affectionate", "loving", "fond", "caring"],
+        ["affectionate", "loving"],
         ["desperate", "hopeless", "frantic", "despairing", "distressed"],
     ]
     alternatives = set([])

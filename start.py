@@ -311,29 +311,41 @@ def format_prompt_for_analysis(
         special_user_message,
         system_prompt,
         confirmation_prompt,
+        feed_history_raw_to=None,
     ):
     """Format the conversation history for bond calculation prompt"""
     system_part = f"<|start_header_id|>system<|end_header_id|>\n\n{system_prompt}<|eot_id|>"
     end_prompt = "<|start_header_id|>assistant<|end_header_id|>\n\n"
-    last_user_message = ""
-    last_assistant_message = ""
-    for msg in reversed(history):
-        if msg["role"] == "user" and last_user_message == "":
-            last_user_message = msg["content"]
-        elif msg["role"] == "assistant" and last_assistant_message == "":
-            last_assistant_message = msg["content"]
-        if last_user_message != "" and last_assistant_message != "":
-            break
-    # because this is for evaluation the user part will be both user and assistant messages
-    # to prevent confusion we will split them in lines each line starting with the speaker name
-    last_user_message = username + ": " + ". ".join(lines for lines in last_user_message.split("\n") if lines.strip() != "")
-    last_assistant_message = character_name + ": " + ". ".join(lines for lines in last_assistant_message.split("\n") if lines.strip() != "")
+    
+    messages_to_use = ""
+
+    if not feed_history_raw_to:
+        last_assistant_message = ""
+        last_user_message = ""
+        for msg in reversed(history):
+            if msg["role"] == "user" and last_user_message == "":
+                last_user_message = msg["content"]
+            elif msg["role"] == "assistant" and last_assistant_message == "":
+                last_assistant_message = msg["content"]
+            if last_user_message != "" and last_assistant_message != "":
+                break
+        
+        # because this is for evaluation the user part will be both user and assistant messages
+        # to prevent confusion we will split them in lines each line starting with the speaker name
+        last_user_message = username + ": " + ". ".join(lines for lines in last_user_message.split("\n") if lines.strip() != "")
+        last_assistant_message = character_name + ": " + ". ".join(lines for lines in last_assistant_message.split("\n") if lines.strip() != "")
+        messages_to_use = f"{last_user_message}\n{last_assistant_message}"
+    else:
+        for msg in history:
+            if msg["role"] == "user" or msg["role"] == "assistant":
+                name_to_use = username if msg["role"] == "user" else character_name
+                messages_to_use = name_to_use + ": " + ". ".join(lines for lines in msg["content"].split("\n") if lines.strip() != "") + "\n" + messages_to_use
     
     # Format as a clear classification task, not continuation
     if special_user_message:
-        user_part = f"<|start_header_id|>user<|end_header_id|>Interaction to analyze:\n\n{special_user_message}\n{last_user_message}\n{last_assistant_message}\n\n{confirmation_prompt}<|eot_id|>"
+        user_part = f"<|start_header_id|>user<|end_header_id|>Interaction to analyze:\n\n{special_user_message}\n{messages_to_use}\n\n{confirmation_prompt}<|eot_id|>"
     else:
-        user_part = f"<|start_header_id|>user<|end_header_id|>Interaction to analyze:\n\n{last_user_message}\n{last_assistant_message}\n\n{confirmation_prompt}<|eot_id|>"
+        user_part = f"<|start_header_id|>user<|end_header_id|>Interaction to analyze:\n\n{messages_to_use}\n\n{confirmation_prompt}<|eot_id|>"
 
     # we don't count because this is guaranteed to be small enough
     prompt = system_part + user_part + end_prompt
@@ -358,7 +370,7 @@ states_handler = StatesHandler(character_folder)
 emotion_handler = EmotionHandler(character_folder, states_handler.get_all_states())
 bonds_handler = BondsHandler(character_folder)
 bonds_handler.check_against_status(states_handler.get_all_states())
-scenery_handler = SceneryHandler(character_folder, visited_locations, states_handler.get_all_states())
+scenery_handler = SceneryHandler(character_folder, states_handler.get_all_states())
 
 print("Loading Llama model...")
 
@@ -370,6 +382,7 @@ def prepare_llm():
     bonds_handler.apply_names(character_name_value, chat_window.username)
     states_handler.apply_names(character_name_value, chat_window.username)
     emotion_handler.apply_names(character_name_value, chat_window.username, character_pronouns=character_pronouns_value)
+    scenery_handler.apply_names(character_name_value, chat_window.username)
 
     global SYSTEM_PROMPT_EMOTIONS
     global SYSTEM_PROMPT_STATES
@@ -559,7 +572,6 @@ def run_inference(user_input, dangling_user_message):
     global current_stranger
     global current_ended
     global ran_post_inference_last
-    global current_bond_weight
     global visited_locations
     global last_requested_location_change
     global last_requested_location_change_was_rejected_since_n_inferences
@@ -567,10 +579,12 @@ def run_inference(user_input, dangling_user_message):
 
     chat_window.character_is_typing()
 
-
     scenery_change_was_just_accepted = False
     scenery_change_was_just_rejected = False
+    scenery_change_wasnt_asked = False
+    is_a_stubboness_repeat = False
     if last_requested_location_change is not None and last_requested_location_change_was_accepted_since_n_inferences == 0 and last_requested_location_change_was_rejected_since_n_inferences == 0:
+        print(f"Pending scenery change to location: {last_requested_location_change}, performing user acceptance check in order to progress the scenery change.")
         # we first need to confirm whether the user accepted the location change
         instructions = scenery_handler.get_system_prompt_for_scenery_change_check()
         scenery_change_analysis_prompt = format_prompt_for_analysis(
@@ -587,7 +601,7 @@ def run_inference(user_input, dangling_user_message):
             "prompt": scenery_change_analysis_prompt,
             "max_tokens": 24,
             "stream": True,
-            "stop": ["<|eot_id|>", "<|start_header_id|>", "\n"],
+            "stop": ["<|eot_id|>", "<|start_header_id|>"],
 
             # different settings for this as we want a more focused response
             "repeat_penalty": 1.0,           # No repeat penalty
@@ -602,11 +616,11 @@ def run_inference(user_input, dangling_user_message):
         scenery_change_response = ""
 
         next_message = json.loads(ws.recv())
-        print("Post inference bond response: ", end="", flush=True)
+        print("Location acceptance response: ", end="", flush=True)
         while next_message["type"] != "done" and next_message["type"] != "error":
             if next_message["type"] == "token":
                 text = next_message["text"]
-                post_inference_response += text
+                scenery_change_response += text
                 print(text, end="", flush=True)
             next_message = json.loads(ws.recv())
         ws.close()
@@ -616,12 +630,17 @@ def run_inference(user_input, dangling_user_message):
         if "yes" in lowered or "accept" in lowered or "sure" in lowered or "yeah" in lowered or "yep" in lowered:
             # user accepted the location change
             scenery_change_was_just_accepted = True
-        elif "no" in lowered or "reject" in lowered or "not" in lowered or "don't" in lowered or "decline" in lowered:
+        elif ("no" in lowered or "reject" in lowered or "not" in lowered or "don't" in lowered or "decline" in lowered) and not (("asked" in lowered) or ("question" in lowered)):
             # user rejected the location change
             scenery_change_was_just_rejected = True
+        elif ("no" in lowered or "never" in lowered) and (("asked" in lowered) or ("question" in lowered)):
+            print("The character was not asked to change location, so we are not already there.")
+            scenery_change_wasnt_asked = True
         else:
             print("Could not determine if user accepted or rejected the location change, assuming rejection.")
             scenery_change_was_just_rejected = True
+
+        is_a_stubboness_repeat = True
 
     is_dead_end_due_to_bond = bonds_handler.is_bond_dead_end(
         current_bond_weight,
@@ -636,13 +655,90 @@ def run_inference(user_input, dangling_user_message):
         last_requested_location_change,
         scenery_change_was_just_accepted,
         scenery_change_was_just_rejected,
+        scenery_change_wasnt_asked,
     )
+
+    scenery_change_is_already_there = False
+    if scenery_change_location is not None and not is_a_stubboness_repeat:
+        print(f"Scenery change detected to location: {scenery_change_location} we will do a sanity check to ensure we are not already there")
+
+        sanity_check_prompt = scenery_handler.get_system_prompt_for_scenery_change_sanity_confirmation_check(scenery_change_location)
+        scenery_change_sanity_analysis_prompt = format_prompt_for_analysis(
+            chat_history,
+            chat_window.username,
+            character_name_value,
+            "",
+            sanity_check_prompt,
+            scenery_handler.get_system_prompt_confirmation_sanity_prompt(scenery_change_location),
+            4,
+        )
+
+        action = {
+            "action": "generate",
+            "prompt": scenery_change_sanity_analysis_prompt,
+            "max_tokens": 24,
+            "stream": True,
+            "stop": ["<|eot_id|>", "<|start_header_id|>"],
+
+            # different settings for this as we want a more focused response
+            "repeat_penalty": 1.0,           # No repeat penalty
+            "frequency_penalty": 0.0,        # No frequency penalty
+            "presence_penalty": 0.0,          # No presence penalty
+            "temperature": 0.8,              # Lower temperature for focused responses
+            "top_p": 0.8,                   # Nucleus sampling
+        }
+        ws = websocket.create_connection("ws://localhost:8000")
+        ws.send(json.dumps(action))
+
+        scenery_change_sanity_response = ""
+
+        next_message = json.loads(ws.recv())
+        print("Sanity Location Response: ", end="", flush=True)
+        while next_message["type"] != "done" and next_message["type"] != "error":
+            if next_message["type"] == "token":
+                text = next_message["text"]
+                scenery_change_sanity_response += text
+                print(text, end="", flush=True)
+            next_message = json.loads(ws.recv())
+        ws.close()
+        print()
+
+        lowered = scenery_change_sanity_response.strip().lower()
+        if "yes" in lowered or "accept" in lowered or "sure" in lowered or "yeah" in lowered or "yep" in lowered:
+            # user accepted the location change
+            print("We are already at the requested location.")
+            scenery_change_is_already_there = True
+        elif "no" in lowered or "reject" in lowered or "not" in lowered or "don't" in lowered or "decline" in lowered:
+            # user rejected the location change
+            print("We are not already at the requested location.")
+            scenery_change_is_already_there = False
+        else:
+            print("Could not determine if user accepted or rejected the sanity check for location change, assuming we are not already there.")
+            scenery_change_is_already_there = False
 
     system_prompt_for_end = bonds_handler.get_instructions_for_bond(
         current_bond_weight,
         current_applied_states,
         current_stranger,
-    ) + scenery_change_prompt
+    ) + ("" if scenery_change_is_already_there or scenery_change_wasnt_asked else scenery_change_prompt)
+
+    # we will start a streaming request to the server
+    last_assistant_message = None
+    for msg in reversed(chat_history):
+        if msg["role"] == "assistant":
+            last_assistant_message = msg
+            break
+
+    is_making_too_long_answers = False
+    if last_assistant_message is not None:
+        # check if last assistant message ended with a full paragraph
+        stripped = last_assistant_message["content"].strip()
+        if len(stripped) > 1500 or len(stripped.split("\n\n")) > 3:
+            is_making_too_long_answers = True
+
+    if is_making_too_long_answers:
+        print("The character is making very long answers, we will add special instructions to make them shorter.")
+        system_prompt_for_end += "\n\nYOU MUST keep your responses concise and to the point. Avoid overly long descriptions or dialogues."
     
     # Format the prompt with history
     prompt = format_prompt(
@@ -659,13 +755,18 @@ def run_inference(user_input, dangling_user_message):
     states_triggered_add = set([])
     states_triggered_discard = set([])
 
-    # we will start a streaming request to the server
+    stop = ["<|eot_id|>", "<|start_header_id|>", f"\n{chat_window.username}:", f"\n{chat_window.username.lower()}:"]
+    # this was reducing creativity too much
+    #if is_making_too_long_answers:
+    #    print("Detected that the character is making too long answers, adding extra stop sequences to limit response length.")
+    #    stop.append("\n\n")  # stop at paragraph end to force shorter answers
+
     action = {
         "action": "generate",
         "prompt": prompt,
         "max_tokens": 512,
         "stream": True,
-        "stop": ["<|eot_id|>", "<|start_header_id|>", f"\n{chat_window.username}:", f"\n{chat_window.username.lower()}:"],
+        "stop": stop,
         "repeat_penalty": REPEAT_PENALTY,           # Penalize repetitions (1.0 = no penalty, higher = more penalty)
         "frequency_penalty": FREQUENCY_PENALTY,        # Reduce likelihood of frequently used tokens
         "presence_penalty": PRESENCE_PENALTY,          # Encourage new topics/ideas
@@ -733,8 +834,22 @@ def run_inference(user_input, dangling_user_message):
     if scenery_change_location is not None:
         last_requested_location_change = scenery_change_location
         last_requested_location_change_was_rejected_since_n_inferences = 0
-        last_requested_location_change_was_accepted_since_n_inferences = 0
-        update_location_change_request(scenery_change_location, save=False)
+        if scenery_change_is_already_there:
+            # prevents from checking as it marks it as accepted
+            last_requested_location_change_was_accepted_since_n_inferences = max(
+                1,
+                last_requested_location_change_was_accepted_since_n_inferences,
+                last_requested_location_change_was_rejected_since_n_inferences,
+            )
+            # add the location as we are already there
+            if not scenery_change_location in visited_locations:
+                visited_locations.append(scenery_change_location)
+                chat_history_all["visited_locations"] = visited_locations
+        else:
+            last_requested_location_change_was_accepted_since_n_inferences = 0
+        chat_history_all["last_requested_location_change_was_rejected_since_n_inferences"] = last_requested_location_change_was_rejected_since_n_inferences
+        chat_history_all["last_requested_location_change_was_accepted_since_n_inferences"] = last_requested_location_change_was_accepted_since_n_inferences
+        chat_history_all["last_requested_location_change"] = last_requested_location_change
     else:
         if last_requested_location_change_was_rejected_since_n_inferences != 0 or scenery_change_was_just_rejected:
             last_requested_location_change_was_rejected_since_n_inferences += 1
@@ -743,6 +858,9 @@ def run_inference(user_input, dangling_user_message):
             # so that the counter goes up and the character can request a new change later
             # the character should do at a increased rate because the first time
             last_requested_location_change_was_accepted_since_n_inferences += 1
+            if not last_requested_location_change in visited_locations:
+                visited_locations.append(last_requested_location_change)
+                chat_history_all["visited_locations"] = visited_locations
         chat_history_all["last_requested_location_change_was_rejected_since_n_inferences"] = last_requested_location_change_was_rejected_since_n_inferences
         chat_history_all["last_requested_location_change_was_accepted_since_n_inferences"] = last_requested_location_change_was_accepted_since_n_inferences
 
@@ -796,7 +914,7 @@ def run_post_inference():
         "prompt": post_bond_analysis_prompt,
         "max_tokens": 24,
         "stream": True,
-        "stop": ["<|eot_id|>", "<|start_header_id|>", "\n"],
+        "stop": ["<|eot_id|>", "<|start_header_id|>"],
 
         # different settings for this as we want a more focused response
         "repeat_penalty": 1.0,           # No repeat penalty

@@ -2,9 +2,15 @@ from os import path
 import random
 
 def read_scenery_file(file_path: str) -> str:
+
     content = None
-    with open(file_path, 'r', encoding='utf-8') as file:
-        content = file.read()
+    try:
+        with open(file_path, 'r', encoding='utf-8') as file:
+            content = file.read()
+    except FileNotFoundError:
+        print("No scenery file found")
+        return (None, None, None)
+
 
     static_locations = []
     journey_locations = []
@@ -79,11 +85,14 @@ class SceneryHandler:
     def __init__(self, character_path: str, available_statuses: list[str] = []):
         self.static_locations, self.journey_locations, self.variables = read_scenery_file(path.join(character_path, "scenarios.txt"))
 
+        if self.static_locations is None or self.journey_locations is None or self.variables is None:
+            return
+
         self.journey_fumble_rate = int(read_variable_as_float(self.variables, "FUMBLE_RATE"))
         self.change_rate = read_variable_as_float(self.variables, "PROACTIVITY_RATE")
         self.min_messages_before_change = int(read_variable_as_float(self.variables, "MIN_MESSAGES"))
         self.min_messages_before_change_initial = int(read_variable_as_float(self.variables, "MIN_MESSAGES_BEFORE_INITIAL"))
-        self.min_messages_before_reject = int(read_variable_as_float(self.variables, "PROBABILITY_REJECTION_COOLDOWN_MESSAGES"))
+        self.min_messages_before_reject = int(read_variable_as_float(self.variables, "REJECTION_COOLDOWN_MESSAGES"))
         self.when_multiplier = int(read_variable_as_float(self.variables, "WHEN_MULTIPLIER"))
         self.initial_change_rate = read_variable_as_float(self.variables, "INITIAL_PROACTIVITY_RATE")
         self.stubborness_rate = read_variable_as_float(self.variables, "STUBBORNESS_RATE")
@@ -100,6 +109,9 @@ class SceneryHandler:
     def apply_names(self, character_name: str, username: str) -> str:
         self.character_name = character_name
         self.username = username
+
+        if self.static_locations is None or self.journey_locations is None or self.variables is None:
+            return
 
         # replace all instances of {char} and {user} in the scenery strings and journey locations
         self.static_locations = [loc.replace("{{char}}", character_name).replace("{{user}}", username) for loc in self.static_locations]
@@ -119,39 +131,64 @@ class SceneryHandler:
         general_instructions = (
             "You are an AI assistant that determines if during the last message from the user, they have accepted a change of scenery or location. "
             "Respond with 'YES' if they have accepted a change of scenery, or 'NO' if they have not. "
-            "Only respond with 'YES' or 'NO' and nothing else."
+            "Respond with 'YES' also if they are already at the requested location. "
+            f"Response with 'NOT ASKED' if there was no scenery change request made by {self.character_name}"
+            "Only respond with 'YES', 'NOT ASKED' or 'NO' and nothing else."
         )
 
         return general_instructions
     
     def get_system_prompt_confirmation_prompt(self, last_requested_location_change: str) -> str:
         """Return the post inference confirmation prompt"""
-        return f"The character has requested to change the location to: {last_requested_location_change.replace('_', ' ').capitalize()}. Did the user accept this change? Answer with a simple 'YES' or 'NO'."
+        return f"Regarding {last_requested_location_change.replace('_', ' ').capitalize()}. Did they go? Are they there already? Were they asked to? Answer with a simple 'YES', 'NO' or 'NOT ASKED'."
     
-    def get_random_scenery_request(
+    def get_system_prompt_for_scenery_change_sanity_confirmation_check(self, location: str):
+        general_instructions = (
+            f"You are an AI assistant that determines if during the last interactions the {self.character_name} and {self.username} are currently at {location.replace('_', ' ').capitalize()}. "
+            "Respond with 'YES' if they are at the location, or 'NO' if they are not. "
+            "Only respond with 'YES' or 'NO' and nothing else."
+        )
+
+        return general_instructions
+    
+    def get_system_prompt_confirmation_sanity_prompt(self, last_requested_location_change: str) -> str:
+        """Return the post inference confirmation prompt"""
+        return f"Are the characters already at: {last_requested_location_change.replace('_', ' ').capitalize()}? Answer with a simple 'YES' or 'NO'."
+    
+    def get_random_scenery_change(
         self,
         all_visited_locations: list[str],
         messages_since_last_location_change: int,
         messages_since_last_rejection: int,
         current_applying_states: list[list[str, int, int]],
+        last_requested_location: str = None,
     ) -> str:
+        if self.static_locations is None or self.journey_locations is None or self.variables is None:
+            print("No scenery locations or variables loaded, cannot perform scenery change.")
+            return None
+        
         change_to_check_with = self.min_messages_before_change_initial if not all_visited_locations and not messages_since_last_rejection else self.min_messages_before_change
         probability_to_check_with = self.initial_change_rate if not all_visited_locations and not messages_since_last_rejection else self.change_rate
 
-        if messages_since_last_location_change < change_to_check_with:
+        if messages_since_last_location_change != 0 and messages_since_last_location_change < change_to_check_with:
             print("Scenery change not considered due to min messages before change.")
             return None
         
-        if messages_since_last_rejection != None and messages_since_last_rejection < self.min_messages_before_reject:
-            print("Scenery change not considered due to rejection cooldown.")
+        if messages_since_last_rejection != 0 and messages_since_last_rejection < self.min_messages_before_reject:
+            print("Scenery change not considered due to rejection cooldown, messages since last rejection:", messages_since_last_rejection, "min messages before reject:", self.min_messages_before_reject)
             return None
         
         if random.random() > probability_to_check_with:
             print("Scenery change not considered due to probability check.")
             return None
         
-        available_journey_locations = [loc for loc in self.processed_journey_locations if loc[0] not in self.already_visited_journey_locations]
+        available_journey_locations = [loc for loc in self.processed_journey_locations if loc[0] not in all_visited_locations]
         available_static_locations = self.processed_static_locations.copy()
+
+        # avoid choosing the last requested location again
+        if last_requested_location is not None:
+            available_journey_locations = [loc for loc in available_journey_locations if loc[0] != last_requested_location]
+            available_static_locations = [loc for loc in available_static_locations if loc[0] != last_requested_location]
         
         if not available_journey_locations and not available_static_locations:
             print("No available locations for scenery change.")
@@ -193,9 +230,18 @@ class SceneryHandler:
         # choose between journey or static location 50/50
         if weighted_journey_locations and (not weighted_static_locations or random.choice([True, False])):
             available_journey_next_options = []
-            for i in range(0, self.journey_fumble_rate):
-                if i < len(weighted_journey_locations):
-                    available_journey_next_options.append(weighted_journey_locations[i])
+            fumbled_count = 0
+            i = 0
+            while fumbled_count < self.journey_fumble_rate or i < len(weighted_journey_locations):
+                location_to_consider = weighted_journey_locations[i]
+                if location_to_consider in available_journey_next_options:
+                    # add it again to increase its chances as it was already considered
+                    available_journey_next_options.append(location_to_consider)
+                else:
+                    # otherwise add it normally and increase fumble count
+                    fumbled_count += 1
+                    available_journey_next_options.append(location_to_consider)
+                i += 1
             
             print("Choosing between journey locations:", available_journey_next_options)
             chosen_location = random.choice(available_journey_next_options)
@@ -210,7 +256,7 @@ class SceneryHandler:
 
         return chosen_location
     
-    def get_prompt_for_scenery_change_request(
+    def get_prompt_for_scenery_change(
         self,
         all_visited_locations: list[str],
         messages_since_last_location_change: int,
@@ -219,13 +265,22 @@ class SceneryHandler:
         last_requested_location_change: str,
         last_requested_location_change_was_accepted: bool,
         last_requested_location_change_was_rejected: bool,
+        last_requested_location_wasnt_asked: bool,
     ):
+        if self.static_locations is None or self.journey_locations is None or self.variables is None:
+            print("No scenery locations or variables loaded, cannot perform scenery change.")
+            return None, ""
+        
+        if last_requested_location_wasnt_asked:
+            print("Last Scenery change was not asked, continuing in current location.")
+            return None, ""
+        
         if last_requested_location_change_was_accepted:
-            print(f"Scenery change was accepted")
+            print(f"Last Scenery change was accepted, creating prompt to continue to new location.")
             return None, f"\n\n{self.username} accepted to go to {last_requested_location_change.replace('_', ' ').lower().capitalize()} ensure to describe the way towards the new location in detail."
         
         if last_requested_location_change_was_rejected:
-            print(f"Scenery change was rejected")
+            print(f"Last Scenery change was rejected, creating prompt to continue in current location.")
             # check against stubborness rate
             if random.random() < self.stubborness_rate:
                 print(f"Scenery change will be re-requested due to stubborness.")
@@ -234,13 +289,16 @@ class SceneryHandler:
                 print(f"Scenery change will not be re-requested due to stubborness.")
                 return None, f"\n\n{self.username} rejected to go to {last_requested_location_change.replace('_', ' ').lower().capitalize()}, respect their decision and continue the story in the current location."
 
-        random_location = self.get_random_scenery_request_change(
+        print("Checking for new random scenery change...")
+        random_location = self.get_random_scenery_change(
             all_visited_locations,
             messages_since_last_location_change,
             messages_since_last_rejection,
             current_applying_states
         )
         if random_location is None:
+            print("No new scenery change selected. Remaining in current location.")
             return None, ""
         else:
+            print(f"New scenery change selected to location: {random_location[0]}")
             return random_location[0], f"\n\nIMPORTANT: {self.character_name} Should suggest changing the scenery to: {random_location[0].replace("_", " ").lower().capitalize()}. {random_location[1]}"

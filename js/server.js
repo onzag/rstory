@@ -84,7 +84,12 @@ async function generateCompletion(data, onToken, onDone, onError) {
             onToken(tokens) {
                 // Stream token-by-token for better responsiveness
                 const text = MODEL.detokenize(tokens);
-                onToken(text);
+                try {
+                    onToken(text);
+                } catch (e) {
+                    console.log("Error in onToken callback:", e.message);
+                    completion.dispose();
+                }
             }
         });
         if (completion !== null) {
