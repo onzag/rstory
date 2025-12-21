@@ -6,6 +6,7 @@ import json
 from lib.bonds import BondsHandler
 from lib.emotion import EmotionHandler
 from lib.states import StatesHandler
+from lib.scenery import SceneryHandler
 from lib.ui import ChatWindow
 from PySide6.QtWidgets import QApplication
 import websocket
@@ -128,6 +129,11 @@ current_ended = chat_history_all.get("ended", None)
 username = chat_history_all["username"]
 ran_post_inference_last = chat_history_all.get("ran_post_inference_last", False)
 
+visited_locations = chat_history_all.get("visited_locations", [])
+last_requested_location_change = chat_history_all.get("last_requested_location_change", None)
+last_requested_location_change_was_rejected_since_n_inferences = chat_history_all.get("last_requested_location_change_was_rejected_since_n_inferences", 0)
+last_requested_location_change_was_accepted_since_n_inferences = chat_history_all.get("last_requested_location_change_was_accepted_since_n_inferences", 0)
+
 def save_conversation_log():
     """Save the current chat history to the conversation log file"""
     with open(conversation_log_path, "w", encoding="utf-8") as f:
@@ -161,6 +167,22 @@ def update_ran_post_inference_last(ran_post_inference, save=True):
     chat_history_all["ran_post_inference_last"] = ran_post_inference
     if save:
         save_conversation_log()
+
+def update_location_change_request(location_change_request, save=True):
+    """Update the last requested location change in the chat history and save the log"""
+    chat_history_all["last_requested_location_change"] = location_change_request
+    chat_history_all["last_requested_location_change_was_rejected_since_n_inferences"] = 0
+    chat_history_all["last_requested_location_change_was_accepted_since_n_inferences"] = 0
+    if save:
+        save_conversation_log()
+
+def add_visited_location(location, save=True):
+    """Add a visited location to the chat history and save the log"""
+    if location not in visited_locations:
+        visited_locations.append(location)
+        chat_history_all["visited_locations"] = visited_locations
+        if save:
+            save_conversation_log()
 
 # System prompt read from bio.txt
 with open(character_system_description_path, "r", encoding="utf-8") as f:
@@ -308,7 +330,10 @@ def format_prompt_for_analysis(
     last_assistant_message = character_name + ": " + ". ".join(lines for lines in last_assistant_message.split("\n") if lines.strip() != "")
     
     # Format as a clear classification task, not continuation
-    user_part = f"<|start_header_id|>user<|end_header_id|>Interaction to analyze:\n\n{special_user_message}\n{last_user_message}\n{last_assistant_message}\n\n{confirmation_prompt}<|eot_id|>"
+    if special_user_message:
+        user_part = f"<|start_header_id|>user<|end_header_id|>Interaction to analyze:\n\n{special_user_message}\n{last_user_message}\n{last_assistant_message}\n\n{confirmation_prompt}<|eot_id|>"
+    else:
+        user_part = f"<|start_header_id|>user<|end_header_id|>Interaction to analyze:\n\n{last_user_message}\n{last_assistant_message}\n\n{confirmation_prompt}<|eot_id|>"
 
     # we don't count because this is guaranteed to be small enough
     prompt = system_part + user_part + end_prompt
@@ -333,6 +358,7 @@ states_handler = StatesHandler(character_folder)
 emotion_handler = EmotionHandler(character_folder, states_handler.get_all_states())
 bonds_handler = BondsHandler(character_folder)
 bonds_handler.check_against_status(states_handler.get_all_states())
+scenery_handler = SceneryHandler(character_folder, visited_locations, states_handler.get_all_states())
 
 print("Loading Llama model...")
 
@@ -533,17 +559,90 @@ def run_inference(user_input, dangling_user_message):
     global current_stranger
     global current_ended
     global ran_post_inference_last
+    global current_bond_weight
+    global visited_locations
+    global last_requested_location_change
+    global last_requested_location_change_was_rejected_since_n_inferences
+    global last_requested_location_change_was_accepted_since_n_inferences
+
+    chat_window.character_is_typing()
+
+
+    scenery_change_was_just_accepted = False
+    scenery_change_was_just_rejected = False
+    if last_requested_location_change is not None and last_requested_location_change_was_accepted_since_n_inferences == 0 and last_requested_location_change_was_rejected_since_n_inferences == 0:
+        # we first need to confirm whether the user accepted the location change
+        instructions = scenery_handler.get_system_prompt_for_scenery_change_check()
+        scenery_change_analysis_prompt = format_prompt_for_analysis(
+            chat_history,
+            chat_window.username,
+            character_name_value,
+            "",
+            instructions,
+            scenery_handler.get_system_prompt_confirmation_prompt(last_requested_location_change),
+        )
+
+        action = {
+            "action": "generate",
+            "prompt": scenery_change_analysis_prompt,
+            "max_tokens": 24,
+            "stream": True,
+            "stop": ["<|eot_id|>", "<|start_header_id|>", "\n"],
+
+            # different settings for this as we want a more focused response
+            "repeat_penalty": 1.0,           # No repeat penalty
+            "frequency_penalty": 0.0,        # No frequency penalty
+            "presence_penalty": 0.0,          # No presence penalty
+            "temperature": 0.8,              # Lower temperature for focused responses
+            "top_p": 0.8,                   # Nucleus sampling
+        }
+        ws = websocket.create_connection("ws://localhost:8000")
+        ws.send(json.dumps(action))
+
+        scenery_change_response = ""
+
+        next_message = json.loads(ws.recv())
+        print("Post inference bond response: ", end="", flush=True)
+        while next_message["type"] != "done" and next_message["type"] != "error":
+            if next_message["type"] == "token":
+                text = next_message["text"]
+                post_inference_response += text
+                print(text, end="", flush=True)
+            next_message = json.loads(ws.recv())
+        ws.close()
+        print()
+
+        lowered = scenery_change_response.strip().lower()
+        if "yes" in lowered or "accept" in lowered or "sure" in lowered or "yeah" in lowered or "yep" in lowered:
+            # user accepted the location change
+            scenery_change_was_just_accepted = True
+        elif "no" in lowered or "reject" in lowered or "not" in lowered or "don't" in lowered or "decline" in lowered:
+            # user rejected the location change
+            scenery_change_was_just_rejected = True
+        else:
+            print("Could not determine if user accepted or rejected the location change, assuming rejection.")
+            scenery_change_was_just_rejected = True
 
     is_dead_end_due_to_bond = bonds_handler.is_bond_dead_end(
         current_bond_weight,
         current_stranger,
     )
 
+    scenery_change_location, scenery_change_prompt = scenery_handler.get_prompt_for_scenery_change(
+        visited_locations,
+        last_requested_location_change_was_accepted_since_n_inferences * 2,
+        last_requested_location_change_was_rejected_since_n_inferences * 2,
+        current_applied_states,
+        last_requested_location_change,
+        scenery_change_was_just_accepted,
+        scenery_change_was_just_rejected,
+    )
+
     system_prompt_for_end = bonds_handler.get_instructions_for_bond(
         current_bond_weight,
         current_applied_states,
         current_stranger,
-    )
+    ) + scenery_change_prompt
     
     # Format the prompt with history
     prompt = format_prompt(
@@ -554,7 +653,6 @@ def run_inference(user_input, dangling_user_message):
     )
 
     # Generate response
-    chat_window.character_is_typing()
     response = ""
     emotion_handler.restart_rolling_emotions()
     emotions_triggered = set([])
@@ -631,6 +729,22 @@ def run_inference(user_input, dangling_user_message):
 
     if not is_dead_end_due_to_bond:
         chat_window.update_status("Ready for next message.")
+
+    if scenery_change_location is not None:
+        last_requested_location_change = scenery_change_location
+        last_requested_location_change_was_rejected_since_n_inferences = 0
+        last_requested_location_change_was_accepted_since_n_inferences = 0
+        update_location_change_request(scenery_change_location, save=False)
+    else:
+        if last_requested_location_change_was_rejected_since_n_inferences != 0 or scenery_change_was_just_rejected:
+            last_requested_location_change_was_rejected_since_n_inferences += 1
+        if last_requested_location_change_was_accepted_since_n_inferences != 0 or scenery_change_was_just_accepted or last_requested_location_change is None:
+            # because we just started we consider that the change was accepted
+            # so that the counter goes up and the character can request a new change later
+            # the character should do at a increased rate because the first time
+            last_requested_location_change_was_accepted_since_n_inferences += 1
+        chat_history_all["last_requested_location_change_was_rejected_since_n_inferences"] = last_requested_location_change_was_rejected_since_n_inferences
+        chat_history_all["last_requested_location_change_was_accepted_since_n_inferences"] = last_requested_location_change_was_accepted_since_n_inferences
 
     save_conversation_log()
 
