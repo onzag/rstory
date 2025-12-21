@@ -363,6 +363,8 @@ class ChatWindow(QMainWindow):
         self.post_inference_thread = None
         self.inference_thread = None
 
+        self.do_not_run_post_inference = False
+
         self.errored = False
         self.character_name = character_name
         self.setWindowTitle("Chat with " + character_name)
@@ -472,7 +474,10 @@ class ChatWindow(QMainWindow):
         if user_text:
             
             if not user_text.startswith("/"):
+                self.do_not_run_post_inference = False
                 self._add_message_label("user", user_text, scroll_to_bottom=True)
+            else:
+                self.do_not_run_post_inference = True
             # clear the user input box
             self.user_input.clear()
 
@@ -633,7 +638,8 @@ class ChatWindow(QMainWindow):
             # focus the user input box
             self.user_input.setFocus()
 
-            self.run_post_inference()
+            if not self.do_not_run_post_inference:
+                self.run_post_inference()
 
     def run_post_inference(self):
         """Run post inference tasks in background thread"""
@@ -743,8 +749,11 @@ class ChatWindow(QMainWindow):
         # unblock the user input box
         self.user_input.setDisabled(False)
 
-    def add_system_text(self, text):
-        self.inference_thread.add_system_text.emit(text)
+    def add_system_text(self, text, postinference_thread=False):
+        if postinference_thread:
+            self.post_inference_thread.add_system_text.emit(text)
+        else:
+            self.inference_thread.add_system_text.emit(text)
 
     @Slot(str)
     def _add_system_text(self, text):

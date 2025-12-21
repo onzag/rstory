@@ -116,13 +116,14 @@ if conversation_log_value == "new":
 last_log_path = path.join(character_folder, "logs", "last.json")
 if not path.exists(last_log_path):
     with open(last_log_path, "w", encoding="utf-8") as f:
-        f.write('{"history": [], "username": null, "bond": 0.0, "applied_states": [], "stranger": true, "ran_post_inference_last": true}')
+        f.write('{"history": [], "username": null, "bond": 0.0, "bond_2nd": 0.0, "applied_states": [], "stranger": true, "ran_post_inference_last": true}')
 
 conversation_log_path = path.join(character_folder, "logs", conversation_log_value)
 # read the conversation log from json
 chat_history_all = json.load(open(conversation_log_path, "r", encoding="utf-8"))
 chat_history = chat_history_all["history"]
 current_bond_weight = chat_history_all["bond"]
+current_2nd_bond_weight = chat_history_all["bond_2nd"]
 current_applied_states = chat_history_all["applied_states"]
 current_stranger = chat_history_all["stranger"]
 current_ended = chat_history_all.get("ended", None)
@@ -147,6 +148,12 @@ def update_username(new_username):
 def update_bond(new_bond: float, save=True):
     """Update the bond weight in the chat history and save the log"""
     chat_history_all["bond"] = new_bond
+    if save:
+        save_conversation_log()
+
+def update_2nd_bond(new_2nd_bond: float, save=True):
+    """Update the second bond weight in the chat history and save the log"""
+    chat_history_all["bond_2nd"] = new_2nd_bond
     if save:
         save_conversation_log()
 
@@ -462,6 +469,16 @@ def run_inference(user_input, dangling_user_message):
     if not user_input:
         return  # skip empty input
     
+    global bonds_handler
+    global current_applied_states
+    global current_stranger
+    global current_ended
+    global ran_post_inference_last
+    global visited_locations
+    global last_requested_location_change
+    global last_requested_location_change_was_rejected_since_n_inferences
+    global last_requested_location_change_was_accepted_since_n_inferences
+    
     if user_input.startswith("/"):
         global CONTEXT_WINDOW_SIZE
         global TEMPERATURE
@@ -470,6 +487,7 @@ def run_inference(user_input, dangling_user_message):
         global FREQUENCY_PENALTY
         global PRESENCE_PENALTY
         global current_bond_weight
+        global current_2nd_bond_weight
 
         command_parts = user_input.split(" ", 1)
         command = command_parts[0]
@@ -482,7 +500,15 @@ def run_inference(user_input, dangling_user_message):
             help_text += "/repeat_penalty [number] - Set the repeat penalty (default 1.1)\n"
             help_text += "/frequency_penalty [number] - Set the frequency penalty (default 0.5)\n"
             help_text += "/presence_penalty [number] - Set the presence penalty (default 0.5)\n"
-            help_text += "/bond - Show the current bond level with the character\n"
+            help_text += "/bond [number -100-100] - Shows or sets the current bond level with the character\n"
+            help_text += "/bond_2nd [number 0-100] - Shows or sets the current second bond level with the character\n"
+            help_text += "/stranger [true/false] - Sets whether you are a stranger to the character\n"
+            help_text += "/states - Show the current applied states\n"
+            help_text += "/stateset [state_name] [strength 0-4] [decay 1-3] - Sets state to the current applied states\n"
+            help_text += "/help - Show this help message\n"
+            #help_text += "/get_bond_prompt - Show the current bonds prompt used for bond evaluation\n"
+            #help_text += "/get_2nd_bond_prompt - Show the current bonds prompt used for 2nd bond evaluation\n"
+            #help_text += "/get_states_prompt - Show the current states prompt used for state evaluation\n"
             chat_window.add_system_text(help_text)
         elif command == "/context_window":
             if not argument:
@@ -551,7 +577,93 @@ def run_inference(user_input, dangling_user_message):
             except ValueError:
                 chat_window.add_system_text("Invalid value for presence penalty.")
         elif command == "/bond":
+            if argument:
+                try:
+                    new_value = float(argument)
+                    if new_value < -100.0:
+                        new_value = -100.0
+                    if new_value > 100.0:
+                        new_value = 100.0
+                    current_bond_weight = new_value
+                    update_bond(new_value)
+                    chat_window.add_system_text(f"Bond level set to {new_value:.2f}.")
+                except ValueError:
+                    chat_window.add_system_text("Invalid value for bond level.")
+                return
             chat_window.add_system_text(f"Current bond level: {current_bond_weight:.2f}")
+        elif command == "/bond_2nd":
+            if argument:
+                try:
+                    new_value = float(argument)
+                    current_2nd_bond_weight = new_value
+                    if new_value < 0.0:
+                        new_value = 0.0
+                    if new_value > 100.0:
+                        new_value = 100.0
+                    update_2nd_bond(new_value)
+                    chat_window.add_system_text(f"Second bond level set to {new_value:.2f}.")
+                except ValueError:
+                    chat_window.add_system_text("Invalid value for second bond level.")
+                return
+            chat_window.add_system_text(f"Current second bond level: {current_2nd_bond_weight:.2f}")
+        elif command == "/states":
+            if not current_applied_states:
+                chat_window.add_system_text("No states are currently applied.")
+            else:
+                states_text = "Current applied states:\n"
+                for state in current_applied_states:
+                    states_text += f"- {state['name']}: Strength {state['strength']}, Decay {state['decay']}\n"
+                chat_window.add_system_text(states_text)
+        elif command == "/stateset":
+            parts = argument.split(" ")
+            if len(parts) != 3:
+                chat_window.add_system_text("Usage: /stateset [state_name] [strength 0-4] [decay 1-3]")
+                return
+            state_name = parts[0]
+            try:
+                strength = int(parts[1])
+                decay = int(parts[2])
+                if strength < 0 or strength > 4 or decay < 1 or decay > 3:
+                    chat_window.add_system_text("Strength must be between 0 and 4, Decay must be between 1 and 3.")
+                    return
+                # check if state exists
+                state_exists = False
+                for state in states_handler.get_all_states():
+                    if state["name"] == state_name:
+                        state_exists = True
+                        break
+                if not state_exists:
+                    chat_window.add_system_text(f"State '{state_name}' does not exist.")
+                    return
+                # update or add the state
+                state_found = False
+                for state in current_applied_states:
+                    if state[0] == state_name:
+                        state[1] = strength
+                        state[2] = decay
+                        state_found = True
+                        break
+                if not state_found:
+                    current_applied_states.append([state_name, strength, decay])
+                update_applied_states(current_applied_states)
+                chat_window.add_system_text(f"State '{state_name}' set to Strength {strength}, Decay {decay}.")
+            except ValueError:
+                chat_window.add_system_text("Invalid strength or decay value. Strength must be 0-4 and Decay must be 1-3.")
+        elif command == "/stranger":
+            if not argument:
+                chat_window.add_system_text(f"Current stranger status: {current_stranger}")
+                return
+            arg_lower = argument.lower()
+            if arg_lower == "true":
+                current_stranger = True
+                update_stranger(True)
+                chat_window.add_system_text("Stranger status set to True.")
+            elif arg_lower == "false":
+                current_stranger = False
+                update_stranger(False)
+                chat_window.add_system_text("Stranger status set to False.")
+            else:
+                chat_window.add_system_text("Invalid value for stranger status. Use 'true' or 'false'.")
         else:
             chat_window.add_system_text(f"Unknown command: {command}. Type /help for a list of commands.")
         return
@@ -566,16 +678,6 @@ def run_inference(user_input, dangling_user_message):
     if not dangling_user_message:
         chat_history.append({"role": "user", "content": user_input})
         save_conversation_log()
-
-    global bonds_handler
-    global current_applied_states
-    global current_stranger
-    global current_ended
-    global ran_post_inference_last
-    global visited_locations
-    global last_requested_location_change
-    global last_requested_location_change_was_rejected_since_n_inferences
-    global last_requested_location_change_was_accepted_since_n_inferences
 
     chat_window.character_is_typing()
 
@@ -718,27 +820,10 @@ def run_inference(user_input, dangling_user_message):
 
     system_prompt_for_end = bonds_handler.get_instructions_for_bond(
         current_bond_weight,
+        current_2nd_bond_weight,
         current_applied_states,
         current_stranger,
     ) + ("" if scenery_change_is_already_there or scenery_change_wasnt_asked else scenery_change_prompt)
-
-    # we will start a streaming request to the server
-    last_assistant_message = None
-    for msg in reversed(chat_history):
-        if msg["role"] == "assistant":
-            last_assistant_message = msg
-            break
-
-    is_making_too_long_answers = False
-    if last_assistant_message is not None:
-        # check if last assistant message ended with a full paragraph
-        stripped = last_assistant_message["content"].strip()
-        if len(stripped) > 1500 or len(stripped.split("\n\n")) > 3:
-            is_making_too_long_answers = True
-
-    if is_making_too_long_answers:
-        print("The character is making very long answers, we will add special instructions to make them shorter.")
-        system_prompt_for_end += "\n\nYOU MUST keep your responses concise and to the point. Avoid overly long descriptions or dialogues."
     
     # Format the prompt with history
     prompt = format_prompt(
@@ -756,10 +841,6 @@ def run_inference(user_input, dangling_user_message):
     states_triggered_discard = set([])
 
     stop = ["<|eot_id|>", "<|start_header_id|>", f"\n{chat_window.username}:", f"\n{chat_window.username.lower()}:"]
-    # this was reducing creativity too much
-    #if is_making_too_long_answers:
-    #    print("Detected that the character is making too long answers, adding extra stop sequences to limit response length.")
-    #    stop.append("\n\n")  # stop at paragraph end to force shorter answers
 
     action = {
         "action": "generate",
@@ -772,6 +853,8 @@ def run_inference(user_input, dangling_user_message):
         "presence_penalty": PRESENCE_PENALTY,          # Encourage new topics/ideas
         "temperature": TEMPERATURE,              # Creativity of responses
         "top_p": TOP_P,                   # Nucleus sampling
+        "max_characters": 1000,            # Limit response length in characters, it will cutoff gracefully at the nearest paragraph
+        "max_paragraphs": 3,               # Limit response length in paragraphs
     }
     ws = websocket.create_connection("ws://localhost:8000")
     ws.send(json.dumps(action))
@@ -888,12 +971,14 @@ def run_post_inference():
     global LAST_STATES_TRIGGERED_ADD
     global LAST_STATES_TRIGGERED_DISCARD
     global current_bond_weight
+    global current_2nd_bond_weight
     global current_stranger
     global current_applied_states
     global ran_post_inference_last
 
     special_user_message_regarding_bonds = "*" + bonds_handler.get_instructions_for_bond(
         current_bond_weight,
+        current_2nd_bond_weight,
         current_applied_states,
         current_stranger,
         for_bond_change=True,
@@ -926,22 +1011,88 @@ def run_post_inference():
     ws = websocket.create_connection("ws://localhost:8000")
     ws.send(json.dumps(action))
 
-    post_inference_response = ""
+    post_inference_bonds_response = ""
 
     next_message = json.loads(ws.recv())
     print("Post inference bond response: ", end="", flush=True)
     while next_message["type"] != "done" and next_message["type"] != "error":
         if next_message["type"] == "token":
             text = next_message["text"]
-            post_inference_response += text
+            post_inference_bonds_response += text
             print(text, end="", flush=True)
         next_message = json.loads(ws.recv())
     ws.close()
     print()
 
     if next_message["type"] == "error":
-        chat_window.add_system_text(f"Error during post processing: {next_message['message']}")
+        chat_window.add_system_text(f"Error during post processing: {next_message['message']}", postinference_thread=True)
         raise Exception("Error during post processing: " + next_message["message"])
+    
+    expected_bond_change = bonds_handler.analyze_response_for_bond_change(
+        post_inference_bonds_response,
+    )
+    
+    # second bond calculation
+    can_ascend_2nd_bond = bonds_handler.can_ascend_2nd_bond(
+        current_bond_weight,
+        current_2nd_bond_weight,
+        current_stranger,
+        expected_bond_change,
+    )
+
+    second_bond_change = 0
+    if can_ascend_2nd_bond:
+        print("Second bond can be ascended based on current bond and expected bond change, the change is: ", expected_bond_change)
+        post_2nd_bond_analysis_prompt = format_prompt_for_analysis(
+            chat_history,
+            chat_window.username,
+            character_name_value,
+            special_user_message_regarding_bonds,
+            bonds_handler.get_2nd_bond_post_inference_system_instructions(),
+            bonds_handler.get_2nd_bond_post_inference_confirmation_prompt(current_bond_weight, current_2nd_bond_weight, current_stranger),
+        )
+
+        # we will start a streaming request to the server
+        action = {
+            "action": "generate",
+            "prompt": post_2nd_bond_analysis_prompt,
+            "max_tokens": 24,
+            "stream": True,
+            "stop": ["<|eot_id|>", "<|start_header_id|>"],
+
+            # different settings for this as we want a more focused response
+            "repeat_penalty": 1.0,           # No repeat penalty
+            "frequency_penalty": 0.0,        # No frequency penalty
+            "presence_penalty": 0.0,          # No presence penalty
+            "temperature": 0.8,              # Lower temperature for focused responses
+            "top_p": 0.8,                   # Nucleus sampling
+        }
+        ws = websocket.create_connection("ws://localhost:8000")
+        ws.send(json.dumps(action))
+
+        post_inference_2nd_bonds_response = ""
+
+        next_message = json.loads(ws.recv())
+        print("Post inference 2nd bond response: ", end="", flush=True)
+        while next_message["type"] != "done" and next_message["type"] != "error":
+            if next_message["type"] == "token":
+                text = next_message["text"]
+                post_inference_2nd_bonds_response += text
+                print(text, end="", flush=True)
+            next_message = json.loads(ws.recv())
+        ws.close()
+        print()
+
+        if next_message["type"] == "error":
+            chat_window.add_system_text(f"Error during post processing: {next_message['message']}", postinference_thread=True)
+            raise Exception("Error during post processing: " + next_message["message"])
+        
+        second_bond_change = bonds_handler.analyze_response_for_2nd_bond_change(
+            post_inference_2nd_bonds_response,
+        )
+        print("Second bond change analyzed as: ", second_bond_change)
+    else:
+        print("Second bond cannot be ascended based on current bond and expected bond change, skipping analysis.")
     
     post_inference_state_prompt = format_prompt_for_analysis(
         chat_history,
@@ -999,22 +1150,26 @@ def run_post_inference():
 
     # calculate bond and states changes
     mini_bonuses = states_handler.get_mini_bonuses(new_applied_states)
-    new_bond, new_stranger = bonds_handler.calculate_bond_change_from_post_inference(
+    new_bond, new_2nd_bond, new_stranger = bonds_handler.calculate_bond_change(
         current_bond_weight,
+        current_2nd_bond_weight,
         current_stranger,
         len([msg for msg in chat_history if msg["role"] == "user" or msg["role"] == "assistant"]),
-        post_inference_response,
+        expected_bond_change,
+        second_bond_change,
         mini_bonuses,
     )
 
-    print(f"Updated bond: {current_bond_weight} -> {new_bond}, stranger: {current_stranger} -> {new_stranger}, applied states: {current_applied_states} -> {new_applied_states}, bond mini bonuses: {mini_bonuses}")
+    print(f"Updated bond: {current_bond_weight}|{current_2nd_bond_weight} -> {new_bond}|{new_2nd_bond}, stranger: {current_stranger} -> {new_stranger}, applied states: {current_applied_states} -> {new_applied_states}, bond mini bonuses: {mini_bonuses}")
 
     update_bond(new_bond, save=False)
+    update_2nd_bond(new_2nd_bond, save=False)
     update_stranger(new_stranger, save=False)
     update_applied_states(new_applied_states, save=False)
     update_ran_post_inference_last(True, save=False)
     ran_post_inference_last = True
     current_bond_weight = new_bond
+    current_2nd_bond_weight = new_2nd_bond
     current_stranger = new_stranger
     current_applied_states = new_applied_states
 

@@ -47,6 +47,10 @@ const wss = new WebSocket.Server({ port: 8000 });
 
 async function generateCompletion(data, onToken, onDone, onError) {
     let prompt = data.prompt;
+    let isDisposed = false;
+    let isContextDisposed = false;
+    let accumulatedText = "";
+    let weDisposedOurselves = false;
     const { LlamaCompletion, LlamaText } = await import('node-llama-cpp');
 
     // fix potential missing newlines at end of prompt
@@ -78,36 +82,107 @@ async function generateCompletion(data, onToken, onDone, onError) {
             customStopTriggers: data.stop || [],
             maxTokens: data.max_tokens || 512,
         }
+        if (typeof data.max_paragraphs === "number") {
+            console.log("Max paragraphs limit set to:", data.max_paragraphs);
+        }
+        if (typeof data.max_characters === "number") {
+            console.log("Max characters limit set to:", data.max_characters);
+        }
         console.log("Generation config:", basicConfig);
         await completion.generateCompletion(prompt, {
             ...basicConfig,
             onToken(tokens) {
+                if (isDisposed || weDisposedOurselves) return;
                 // Stream token-by-token for better responsiveness
                 const text = MODEL.detokenize(tokens);
                 try {
-                    onToken(text);
+                    if (typeof data.max_paragraphs === "number") {
+                        accumulatedText += text;
+                        // count paragraphs
+                        let paragraphCount = 0;
+                            
+                        for (let i = 0; i < accumulatedText.length; i++) {
+                            if (accumulatedText[i] === '\n' && accumulatedText[i+1] === '\n') {
+                                paragraphCount += 1;
+                            }
+                            if (paragraphCount >= data.max_paragraphs) {
+                                console.log("Max paragraphs reached:", paragraphCount, "stopping completion early.");
+                                // I think newlines are whole tokens, but just in case the text contains some text too
+                                const potentialPartBeforeNew = text.split("\n")[0]
+                                if (potentialPartBeforeNew.length > 0) {
+                                    onToken(potentialPartBeforeNew);
+                                }
+                                weDisposedOurselves = true;
+                                throw new Error("STOP_GENERATION");
+                            }
+                        }
+                    }
+                    if (typeof data.max_characters === "number" && !isDisposed) {
+                        const characterCount = accumulatedText.length;
+                        if (characterCount >= data.max_characters) {
+                                // let's find if our text is finally finishing a paragraph
+                            if (text.indexOf('\n') !== -1) {
+                                console.log("Max characters reached:", characterCount, "stopping completion at this paragraph end.");
+                                const potentialPartBeforeNew = text.split("\n")[0]
+                                if (potentialPartBeforeNew.length > 0) {
+                                    onToken(potentialPartBeforeNew);
+                                }
+                                weDisposedOurselves = true;
+                                throw new Error("STOP_GENERATION");
+                            }
+                        }
+                    }
+                    if (!isDisposed) {
+                        onToken(text);
+                    }
                 } catch (e) {
-                    console.log("Error in onToken callback:", e.message);
-                    completion.dispose();
+                    if (!weDisposedOurselves) {
+                        console.log("Error in onToken callback:", e.message);
+                    }
+                    throw e;
                 }
             }
         });
-        if (completion !== null) {
-            await completion.dispose();
+        if (completion !== null && !isDisposed) {
+            // Extremely buggy behavior in llama-cpp bindings, no documentation on this, have to do try-catch everywhere
+            try {
+                isDisposed = true;
+                await completion.dispose();
+            } catch {
+            }
         }
-        if (context !== null) {
-            await context.dispose();
+        if (context !== null && !isContextDisposed) {
+            // Extremely buggy behavior in llama-cpp bindings, no documentation on this, have to do try-catch everywhere
+            try {
+                isContextDisposed = true;
+                await context.dispose();
+            } catch {
+            }
         }
         onDone();
     } catch (e) {
-        if (completion !== null) {
-            await completion.dispose();
+        if (completion !== null && !isDisposed) {
+            try {
+                isDisposed = true;
+                await completion.dispose();
+            } catch {
+            }
         }
-        if (context !== null) {
-            await context.dispose();
+        if (context !== null && !isContextDisposed) {
+            try {
+                isContextDisposed = true;
+                await context.dispose();
+            } catch {
+            }
+            
         }
-        console.log(e.message);
-        onError(e);
+        
+        if (weDisposedOurselves) {
+            onDone();
+        } else {
+            console.log(e.message);
+            onError(e);
+        }
     }
 }
 
@@ -134,13 +209,13 @@ wss.on('connection', (ws) => {
                     return;
                 }
 
-                generateCompletion(data, (text) => {
+                await generateCompletion(data, (text) => {
                     ws.send(JSON.stringify({ type: 'token', text }));
                 }, () => {
                     ws.send(JSON.stringify({ type: 'done' }));
                 }, (error) => {
                     ws.send(JSON.stringify({ type: 'error', message: error.message }));
-                })
+                });
 
             } else if (data.action === 'count_tokens') {
                 if (!MODEL) {

@@ -10,6 +10,7 @@ class BondsHandler:
         self.bonds_config_path = path.join(self.bonds_folder, "config.json")
         # check the following attributes exist in config.json
         # bond_climb_rate, positive float
+        # 2nd_bond_climb_rate, positive float
         # bond_stranger_breakaway, positive int
         # bond_stranger_breakaway_reset_multiplier, positive float
         # bond_stranger_breakaway_reset_negative_multiplier, positive float
@@ -18,6 +19,7 @@ class BondsHandler:
         # bond_stranger_messages_breakaway_negative_multiplier, positive float
         # bond_stranger_negative_bias_multiplier, positive float
         # bond_negative_bias_multiplier, positive float
+        # 2nd_bond_negative_bias_multiplier, positive float
         if not path.exists(self.bonds_config_path):
             raise ValueError("Missing bonds config.json file in bonds folder")
         with open(self.bonds_config_path, "r", encoding="utf-8") as f:
@@ -25,6 +27,7 @@ class BondsHandler:
 
         required_attributes = {
             "bond_climb_rate": "pos_float",
+            "2nd_bond_climb_rate": "pos_float",
             "bond_stranger_breakaway": "pos_int",
             "bond_stranger_breakaway_reset_multiplier": "pos_float",
             "bond_stranger_breakaway_reset_negative_multiplier": "pos_float",
@@ -35,6 +38,7 @@ class BondsHandler:
             "bond_negative_bias_multiplier": "pos_float",
             "bond_stranger_neutral_bias_multiplier": "pos_float",
             "bond_neutral_bias_multiplier": "pos_float",
+            "2nd_bond_negative_bias_multiplier": "pos_float",
         }
         for attr in required_attributes:
             if attr not in self.bonds_config:
@@ -61,6 +65,8 @@ class BondsHandler:
         self.bond_negative_bias_multiplier = self.bonds_config["bond_negative_bias_multiplier"]
         self.bond_neutral_bias_multiplier = self.bonds_config["bond_neutral_bias_multiplier"]
         self.bond_stranger_neutral_bias_multiplier = self.bonds_config["bond_stranger_neutral_bias_multiplier"]
+        self._2nd_bond_climb_rate = self.bonds_config["2nd_bond_climb_rate"]
+        self._2nd_bond_negative_bias_multiplier = self.bonds_config["2nd_bond_negative_bias_multiplier"]
 
         # list all the files in bonds_folder
         self.bond_files = [f for f in listdir(self.bonds_folder) if f.endswith(".txt")]
@@ -115,6 +121,26 @@ class BondsHandler:
 
         with open(path.join(self.bonds_folder, "stranger_bad.txt"), "r", encoding="utf-8") as f:
             self.stranger_bad_bond = f.read().strip()
+
+    def check_bond_lines_for_states(self, description, bond_text_line_splits, states: list[str]):
+        bond_text_line_splits_per_2nd_bond = []
+        bond_2nd_arr = []
+        for line in bond_text_line_splits:
+            if not line or line[0] == "#":
+                continue
+            if line[0] == "?":
+                bond_text_line_splits_per_2nd_bond.append([])
+                bond_2nd_arr.append(int(line[1:].strip()))
+            else:
+                if not bond_text_line_splits_per_2nd_bond:
+                    raise ValueError(f"Bond lines in {description} must start with a 2nd bond level indicator '?'")
+                bond_text_line_splits_per_2nd_bond[-1].append(line)
+        for state in states:
+            for i, bond_text_line_splits in enumerate(bond_text_line_splits_per_2nd_bond):
+                if not any(line.startswith(f"{state}:") for line in bond_text_line_splits):
+                    if state == "**":
+                        continue  # bond change rules are optional
+                    raise ValueError(f"State '{state}' not found in {description}, 2nd bond level {bond_2nd_arr[i]}")
         
     def check_against_status(self, states: list[str]) -> bool:
         # this is for checking, we need to check that every status is indicated in each bond file as a line stating <status>: value
@@ -128,29 +154,62 @@ class BondsHandler:
                 continue  # exceptional bond, skip checking
 
             bond_text_line_splits = bond_text.splitlines()
-            for state in states:
-                if not any(line.startswith(f"{state}:") for line in bond_text_line_splits):
-                    if state == "**":
-                        continue  # bond change rules are optional
-                    raise ValueError(f"State '{state}' not found in bond range {min_bond} to {max_bond}")
+            self.check_bond_lines_for_states(f"bond range {min_bond} to {max_bond}", bond_text_line_splits, states)
                 
         # also check stranger bond
         bond_text = self.stranger_bond
         bond_text_line_splits = bond_text.splitlines()
-        for state in states:
-            if not any(line.startswith(f"{state}:") for line in bond_text_line_splits):
-                if state == "**":
-                    continue  # bond change rules are optional
-                raise ValueError(f"State '{state}' not found in stranger bond")
+        self.check_bond_lines_for_states("stranger bond", bond_text_line_splits, states)
             
         # also check stranger bad bond
         bond_text = self.stranger_bad_bond
         bond_text_line_splits = bond_text.splitlines()
-        for state in states:
-            if not any(line.startswith(f"{state}:") for line in bond_text_line_splits):
-                if state == "**":
-                    continue  # bond change rules are optional
-                raise ValueError(f"State '{state}' not found in stranger bad bond")
+        self.check_bond_lines_for_states("stranger bad bond", bond_text_line_splits, states)
+
+    def process_bond(self, description, bond_lines: list[str]):
+        bond_dict = {}
+        exceptional = False
+        current_2nd_bond_level = None
+        for line in bond_lines:
+            if not line or line[0] == "#":
+                continue
+            if line[0] == "!":
+                exceptional = True
+                if ":" in line:
+                    state, value = line[1:].split(":", 1)
+                    bond_dict[state.strip()] = value.strip()
+            elif line[0] == "?" and not exceptional:
+                # second bond level indicator
+                next_2nd_bond_level = int(line[1:].strip())
+                if next_2nd_bond_level < 0 or next_2nd_bond_level > 100:
+                    raise ValueError(f"Invalid second bond level indicator '{line}' in {description}, must be between 0 and 100")
+                if current_2nd_bond_level is not None and next_2nd_bond_level < current_2nd_bond_level:
+                    raise ValueError(f"Second bond level indicators must be in ascending order, found '{line}' after level {current_2nd_bond_level} in {description}")
+                elif current_2nd_bond_level is None and next_2nd_bond_level != 0:
+                    raise ValueError(f"First second bond level indicator must be 0, found '{line}' in {description}")
+                # check that the previous bond has at least one ascent rule
+                if current_2nd_bond_level is not None:
+                    if "ascent_rules" not in bond_dict[current_2nd_bond_level]:
+                        raise ValueError(f"Second bond level {current_2nd_bond_level} in {description} must have at least one ascent rule")
+                current_2nd_bond_level = next_2nd_bond_level
+                bond_dict[current_2nd_bond_level] = {}
+            elif line[0] == ">" and not exceptional:
+                # second bond level ascent rule
+                if current_2nd_bond_level is None:
+                    raise ValueError(f"Second bond level ascent rule '{line}' found before any second bond level indicator in {description}")
+                ascent_rule = line[1:].strip()
+                if "ascent_rules" not in bond_dict[current_2nd_bond_level]:
+                    bond_dict[current_2nd_bond_level]["ascent_rules"] = []
+                bond_dict[current_2nd_bond_level]["ascent_rules"].append(ascent_rule)
+            elif ":" in line and not exceptional:
+                if current_2nd_bond_level is None:
+                    raise ValueError(f"State line '{line}' found before any second bond level indicator in {description}")
+                state, value = line.split(":", 1)
+                bond_dict[current_2nd_bond_level][state.strip()] = value.strip()
+            elif exceptional:
+                bond_dict["dead_end"] = line.strip()
+
+        return bond_dict
 
     def apply_names(self, character_name: str, username: str):
         self.character_name = character_name
@@ -180,34 +239,13 @@ class BondsHandler:
         for min_bond, max_bond in self.bond_texts:
             bond_text = self.bond_texts[(min_bond, max_bond)]
             bond_lines = bond_text.splitlines()
-            bond_dict = {}
-            exceptional = False
-            for line in bond_lines:
-                if line[0] == "!":
-                    exceptional = True
-                    if ":" in line:
-                        state, value = line[1:].split(":", 1)
-                        bond_dict[state.strip()] = value.strip()
-                elif ":" in line and not exceptional:
-                    state, value = line.split(":", 1)
-                    bond_dict[state.strip()] = value.strip()
-                elif exceptional:
-                    bond_dict["dead_end"] = line.strip()
-            self.processed_bonds[(min_bond, max_bond)] = bond_dict
+            self.processed_bonds[(min_bond, max_bond)] = self.process_bond(f"bond range {min_bond} to {max_bond}", bond_lines)
 
-        self.processed_stranger_bond = {}
         stranger_lines = self.stranger_bond.splitlines()
-        for line in stranger_lines:
-            if ":" in line:
-                state, value = line.split(":", 1)
-                self.processed_stranger_bond[state.strip()] = value.strip()
+        self.processed_stranger_bond = self.process_bond("stranger bond", stranger_lines)
 
-        self.processed_stranger_bad_bond = {}
         stranger_bad_lines = self.stranger_bad_bond.splitlines()
-        for line in stranger_bad_lines:
-            if ":" in line:
-                state, value = line.split(":", 1)
-                self.processed_stranger_bad_bond[state.strip()] = value.strip()
+        self.processed_stranger_bad_bond = self.process_bond("stranger bad bond", stranger_bad_lines)
 
     def is_bond_dead_end(self, bond_value: int, stranger_bond: bool) -> str:
         """Check if the current bond is a dead end bond"""
@@ -218,39 +256,65 @@ class BondsHandler:
                 processed_bond = self.processed_bonds[(min_bond, max_bond)]
                 return processed_bond.get("dead_end", None)
         return None
-
-    def get_instructions_for_bond(
+    
+    def get_processed_bond(
         self,
         bond_value: int,
-        applying_states: list[list[str, int, int]],
+        second_bond_value: int,
         stranger_bond: bool,
-        for_bond_change: bool = False,
-    ) -> dict[str, str]:
+    ):
         """Get the bond instructions for the given bond value"""
-        processed_bond = None
+        processed_bond_base = None
         if stranger_bond:
             if bond_value < 0:
-                processed_bond = self.processed_stranger_bad_bond
+                processed_bond_base = self.processed_stranger_bad_bond
             else:
-                processed_bond = self.processed_stranger_bond
+                processed_bond_base = self.processed_stranger_bond
         else:
             for min_bond, max_bond in self.processed_bonds:
                 if bond_value >= min_bond and bond_value < max_bond:
-                    processed_bond = self.processed_bonds[(min_bond, max_bond)]
+                    processed_bond_base = self.processed_bonds[(min_bond, max_bond)]
                     break
 
         if bond_value >= 100:
             for min_bond, max_bond in self.processed_bonds:
                 if max_bond == 100:
-                    processed_bond = self.processed_bonds[(min_bond, max_bond)]
+                    processed_bond_base = self.processed_bonds[(min_bond, max_bond)]
                     break
 
-        if processed_bond is None:
-            print(f"Warning: No bond instructions found for bond value {bond_value}")
-            return ""
-        
-        if processed_bond.get("!", None):
+        if processed_bond_base.get("!", None):
             print(f"Warning: Bond instructions for bond value {bond_value} is marked as dead end")
+            return (True, processed_bond_base)
+
+        processed_bond = None
+        sorted_keys = sorted(processed_bond_base.keys())
+        for i in range(0, len(sorted_keys)):
+            minimum = sorted_keys[i]
+            maximum = sorted_keys[i + 1] if i < len(sorted_keys) - 1 else 100
+            if second_bond_value >= minimum and second_bond_value < maximum:
+                processed_bond = processed_bond_base[minimum]
+
+        if processed_bond is None:
+            print(f"Warning: No bond instructions found for bond value {bond_value} and second bond value {second_bond_value}")
+            return (False, None)
+        
+        return (False, processed_bond)
+
+    def get_instructions_for_bond(
+        self,
+        bond_value: int,
+        second_bond_value: int,
+        applying_states: list[list[str, int, int]],
+        stranger_bond: bool,
+        for_bond_change: bool = False,
+    ) -> str:
+        """Get the bond instructions for the given bond value"""
+        is_dead_end, processed_bond = self.get_processed_bond(
+            bond_value,
+            second_bond_value,
+            stranger_bond,
+        )
+        if is_dead_end:
             return processed_bond["!"]
         
         # now we want to get the instructions for the applying states
@@ -292,7 +356,7 @@ class BondsHandler:
             f"\n\n{self.character_name} should be proactive and propose ideas, activities, and things to do with {self.username} based on the circumstances and their bond" + \
             f"\n\n{self.character_name} may change the scenario and setting to keep things interesting for both parties"
         
-    def calculate_bond_change(self, current_bond: float, current_stranger: bool, total_messages_exchanged: int, change: int, minis: int) -> tuple[float, bool]:
+    def calculate_bond_change(self, current_bond: float, current_2nd_bond: float, current_stranger: bool, total_messages_exchanged: int, change: int, change_2nd: int, minis: int) -> tuple[float, bool]:
         next_bond_amount = current_bond
         if change > 0:
             next_bond_amount += self.bond_climb_rate*change
@@ -304,6 +368,18 @@ class BondsHandler:
                 next_bond_amount = -100
         else:
             next_bond_amount += self.bond_climb_rate * (self.bond_stranger_neutral_bias_multiplier if current_stranger else self.bond_neutral_bias_multiplier)
+
+        next_2nd_bond_amount = current_2nd_bond
+        if change < 0:
+            # with negative changes, we also reduce the second bond, and punish it according to the negative bias multiplier
+            next_2nd_bond_amount -= self._2nd_bond_climb_rate*(self.bond_stranger_negative_bias_multiplier if current_stranger else self._2nd_bond_negative_bias_multiplier)*abs(change)
+            if next_2nd_bond_amount < 0:
+                # second bond cannot go below 0, it's only a positive bond
+                next_2nd_bond_amount = 0
+        elif change_2nd > 0:
+            next_2nd_bond_amount += self._2nd_bond_climb_rate*change_2nd
+            if next_2nd_bond_amount > 100:
+                next_2nd_bond_amount = 100
 
         # add the mini bonuses, that count as neutral interactions
         if change >= 0:
@@ -319,7 +395,7 @@ class BondsHandler:
                 next_bond_amount = next_bond_amount * (self.bond_stranger_messages_breakaway_negative_multiplier if next_bond_amount < 0 else self.bond_stranger_messages_breakaway_multiplier)
                 next_stranger = False
 
-        return next_bond_amount, next_stranger
+        return next_bond_amount, next_2nd_bond_amount, next_stranger
     
     def get_system_instructions(self) -> str:
         return ""
@@ -335,7 +411,71 @@ class BondsHandler:
         """Return the post inference confirmation prompt"""
         return "Your classification (output ONLY one of the exact phrases): *The interaction was Positive* | *The interaction was Negative* | *The interaction was very Positive* | *The interaction was very Negative* | *The interaction was extremely Positive* | *The interaction was extremely Negative* | *The interaction was Neutral*"
     
-    def calculate_bond_change_from_post_inference(self, current_bond: float, current_stranger: bool, total_messages_exchanged: int, post_inference_response: str, minis: int) -> tuple[float, bool]:
+    def get_2nd_bond_post_inference_system_instructions(self) -> str:
+        """Return the post inference step instructions"""
+        return f"You are an assistant that analyses conversations between {self.character_name} and {self.username}." + \
+            "\n\nYou MUST respond with:\"YES\" or \"NO\" each of the questions given, do not explain your answers, simply output in the format. " + \
+            "\n\n1. YES, 2. NO, etc. to the questions. that come after QUESTIONS:"
+    
+    def get_2nd_bond_post_inference_confirmation_prompt(self, current_bond, current_2nd_bond, stranger_bond) -> str:
+        """Return the post inference confirmation prompt"""
+        # get the questions from the ascent rules for the given bond and second bond
+        exceptional, processed_bond = self.get_processed_bond(
+            current_bond,
+            current_2nd_bond,
+            stranger_bond,
+        )
+        if exceptional:
+            raise ValueError("Cannot get ascent questions for dead end bond")
+        elif not processed_bond:
+            raise ValueError("Cannot get ascent questions for invalid bond")
+        
+        ascent_questions = processed_bond.get("ascent_rules", [])
+        ascent_questions_formatted = ""
+        for i, question in enumerate(ascent_questions):
+            ascent_questions_formatted += f"{i + 1}. {question}\n"
+        return f"QUESTIONS:\n\n{ascent_questions_formatted}\n\nYour response should be in the format: 1. YES or NO, 2. YES or NO, etc. Answer the questions"
+    
+    def can_ascend_2nd_bond(self, current_bond: int, current_2nd_bond: int, stranger_bond: bool, expected_next_bond_change: int) -> bool:
+        # second bond can only ascend if the expected next bond change is positive
+        if expected_next_bond_change <= 0:
+            return False
+        
+        # get the ascent rules from the processed bond
+        is_dead_end, processed_bond = self.get_processed_bond(
+            current_bond,
+            current_2nd_bond,
+            stranger_bond,
+        )
+        if is_dead_end:
+            print(f"Bond instructions for bond value {current_bond} is marked as dead end, cannot ascend second bond")
+            return False
+        
+        ascent_rules = processed_bond.get("ascent_rules", [])
+        if not ascent_rules:
+            print(f"No ascent rules found for bond value {current_bond} and second bond value {current_2nd_bond}, cannot ascend second bond")
+            return False
+        
+        # can ascend, ascent must be confirmed in post inference
+        print(f"Second bond can ascend for bond value {current_bond} and second bond value {current_2nd_bond}")
+        return True
+
+    def analyze_response_for_2nd_bond_change(self, post_inference_response: str) -> int:
+        # we are merely count the amount of yes in the response
+        if post_inference_response is None:
+            return 0
+        
+        response_lower = post_inference_response.lower()
+        change = 0
+        change += response_lower.count("yes")
+        if change > 3:
+            change = 3
+        return change
+    
+    def analyze_response_for_bond_change(self, post_inference_response: str) -> int:
+        if post_inference_response is None:
+            return 0
+        
         """Calculate the bond change from the post inference response"""
         response_lower = post_inference_response.lower()
         change = 0
@@ -356,4 +496,4 @@ class BondsHandler:
         elif "extreme" in response_lower or "overwhelm" in response_lower:
             change *= 3
 
-        return self.calculate_bond_change(current_bond, current_stranger, total_messages_exchanged, change, minis)
+        return change
