@@ -1,0 +1,552 @@
+{
+    "title": "Character Schema",
+    "type": "object",
+    "properties": {
+        "name": {
+            "type": "string",
+            "title": "Character Name",
+            "description": "The name of the character.",
+            "maxLength": 100,
+            "minLength": 1
+        },
+        "gender": {
+            "type": "string",
+            "title": "Character Gender",
+            "description": "The gender of the character.",
+            "enum": [
+                "male",
+                "female",
+                "ambiguous"
+            ]
+        },
+        "sex": {
+            "type": "string",
+            "title": "Character Sex",
+            "description": "The sex of the character.",
+            "enum": [
+                "male",
+                "female",
+                "intersex"
+            ]
+        },
+        "general": {
+            "type": "string",
+            "title": "General Information",
+            "description": "Describes the character general behaviour and personality, it is in YOU format, you are, you do, as {{char}}",
+            "maxLength": 1000,
+            "minLength": 50
+        },
+        "short": {
+            "type": "string",
+            "title": "Short Description",
+            "description": "A short description of the character, used in lists and overviews.",
+            "maxLength": 250,
+            "minLength": 20
+        },
+        "initiative": {
+            "type": "float",
+            "title": "Character Initiative",
+            "description": "A value between 0 and 1 that determines how often the character takes initiative in conversations.",
+            "minimum": 0,
+            "maximum": 1
+        },
+        "stranger_initiative": {
+            "type": "float",
+            "title": "Stranger Initiative",
+            "description": "A value between 0 and 1 that determines how often the character takes initiative in conversations with strangers, initializing a stranger bond",
+            "minimum": 0,
+            "maximum": 1
+        },
+        "left_behind_lost_potential": {
+            "type": "float",
+            "minimum": 0,
+            "maximum": 1,
+            "title": "Left Behind Lost Potential",
+            "description": "When a character is left behind, this value determines a random roll, per inference for the character to get lost at the location, not being there anymore"
+        },
+        "left_behind_remove_states": {
+            "type": "array",
+            "title": "Left Behind Remove States",
+            "description": "States that are removed from the character when they are left behind.",
+            "items": {
+                "type": "string"
+            },
+            "minItems": 1
+        },
+        "left_behind_add_states": {
+            "type": "array",
+            "title": "Left Behind Add States",
+            "description": "States that are added to the character when they are left behind.",
+            "items": {
+                "type": "string"
+            },
+            "minItems": 1
+        },
+        "left_behind_lost_remove_states": {
+            "type": "array",
+            "title": "Left Behind Remove States",
+            "description": "States that are removed from the character when they are left behind and they get lost.",
+            "items": {
+                "type": "string"
+            },
+            "minItems": 1
+        },
+        "left_behind_lost_add_states": {
+            "type": "array",
+            "title": "Left Behind Add States",
+            "description": "States that are added to the character when they are left behind and they get lost.",
+            "items": {
+                "type": "string"
+            },
+            "minItems": 1
+        },
+        "states": {
+            "title": "Character States",
+            "description": "Each state must be uppercase and unique.",
+            "type": "object",
+            "additionalProperties": {
+                "type": "object",
+                "properties": {
+                    "common_state_experienced_by_character": {
+                        "type": "boolean",
+                        "description": "Indicates if this state is commonly experienced by the character."
+                    },
+                    "has_custom_viewables": {
+                        "type": "boolean",
+                        "description": "Indicates if this state affects the character's viewables."
+                    },
+                    "random_spawn_rate": {
+                        "type": "number",
+                        "description": "The random spawn rate for this state.",
+                        "minimum": 0,
+                        "maximum": 1
+                    },
+                    "conflict_states": {
+                        "type": "array",
+                        "description": "States that conflict with this state, cannot be active at the same time.",
+                        "items": {
+                            "type": "string"
+                        }
+                    },
+                    "triggers_states": {
+                        "type": "array",
+                        "description": "States that are triggered when this state is activated.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "state": {
+                                    "type": "string"
+                                },
+                                "intensity": {
+                                    "type": "number",
+                                    "minimum": 0,
+                                    "maximum": 4
+                                }
+                            },
+                            "required": [
+                                "state",
+                                "intensity"
+                            ]
+                        }
+                    },
+                    "relieves_states": {
+                        "type": "array",
+                        "description": "States that are relieved when this state is activated.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "state": {
+                                    "type": "string"
+                                },
+                                "intensity_loss": {
+                                    "type": "number",
+                                    "minimum": -4,
+                                    "maximum": 0
+                                }
+                            },
+                            "required": [
+                                "state",
+                                "intensity_loss"
+                            ]
+                        }
+                    },
+                    "disabled_by_default": {
+                        "type": "boolean",
+                        "description": "Indicates if this state is disabled by default, if so it must be enabled by a bond."
+                    },
+                    "automatic_trigger": {
+                        "type": "boolean",
+                        "description": "Indicates if this state can be triggered automatically by the criteria of the LLM, useful for generic states that indicate emotions for example."
+                    },
+                    "automatic_reliever": {
+                        "type": "boolean",
+                        "description": "Indicates if this state can be relieved automatically by the criteria of the LLM, useful for generic states that indicate emotions for example."
+                    },
+                    "decay_rate_per_inference": {
+                        "type": "number",
+                        "description": "The decay rate per inference for this state, a value between 0 and 3.",
+                        "minimum": 0,
+                        "maximum": 3
+                    },
+                    "manual_triggers": {
+                        "type": "array",
+                        "description": "Manual triggers that can activate this state.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "if": {
+                                    "type": "string",
+                                    "description": "The ensure rule to add into the prompt to trigger this state, always starts as if, eg. {{user}} and {{char}} are alone together"
+                                }
+                            }
+                        },
+                        "minItems": 1
+                    },
+                    "manual_relievers": {
+                        "type": "array",
+                        "description": "Manual relievers that can deactivate this state.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "if": {
+                                    "type": "string",
+                                    "description": "The ensure rule to add into the prompt to relieve this state, always starts as if, eg. {{user}} comforts {{char}}"
+                                }
+                            }
+                        }
+                    },
+                    "active_behaviour": {
+                        "type": "boolean",
+                        "description": "Indicates if this state represents a behaviour that is actively shown by the character when the state is active. Rather than a mental state."
+                    }
+                },
+                "required": [
+                    "common_state_experienced_by_character",
+                    "has_custom_viewables"
+                ]
+            }
+        },
+        "bonds": {
+            "title": "Character Bonds",
+            "description": "Defines the bonds associated with the character.",
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "min_bond_level": {
+                        "type": "integer",
+                        "description": "The minimum bond level this bond applies to.",
+                        "minimum": -100,
+                        "maximum": 100
+                    },
+                    "max_bond_level": {
+                        "type": "integer",
+                        "description": "The maximum bond level this bond applies to.",
+                        "minimum": -100,
+                        "maximum": 100
+                    },
+                    "min_2nd_bond_level": {
+                        "type": "integer",
+                        "description": "The minimum second bond level this bond applies to.",
+                        "minimum": 0,
+                        "maximum": 100
+                    },
+                    "max_2nd_bond_level": {
+                        "type": "integer",
+                        "description": "The maximum second bond level this bond applies to.",
+                        "minimum": 0,
+                        "maximum": 100
+                    },
+                    "disable_states": {
+                        "type": "array",
+                        "description": "States to disable when this bond is active.",
+                        "items": {
+                            "type": "string"
+                        },
+                        "minItems": 1
+                    },
+                    "enable_states": {
+                        "type": "array",
+                        "description": "States to enable when this bond is active, only if they are disabled by default.",
+                        "items": {
+                            "type": "string"
+                        },
+                        "minItems": 1
+                    },
+                    "trigger_dead_end": {
+                        "type": "string",
+                        "description": "Indicates if this bond triggers a dead end and which one."
+                    },
+                    "2nd_bond_increase_questions": {
+                        "type": "array",
+                        "description": "Rules for increasing the second bond level when this bond is active.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "question": {
+                                    "type": "string",
+                                    "description": "The question to ask the user to increase the second bond level."
+                                }
+                            },
+                            "required": [
+                                "question"
+                            ]
+                        }
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "The description of the bond, use {{char}} and {{user}} as placeholders."
+                    },
+                    "states": {
+                        "type": "object",
+                        "description": "State prompt injections associated with this bond.",
+                        "additionalProperties": {
+                            "type": "object",
+                            "properties": {
+                                "description": {
+                                    "type": "string",
+                                    "description": "The prompt injection text for this state, use {{char}} and {{user}} as placeholders; eg. {{char}} is now happy and will cheer {{user}}"
+                                },
+                                "initial_message": {
+                                    "type": "string",
+                                    "description": "If specified, forces an initial message action when this bond is activated, use {{char}} and {{user}} as placeholders; eg. {{char}} smiles at {{user}}"
+                                },
+                                "manual_triggers": {
+                                    "type": "array",
+                                    "description": "Manual triggers that can activate this state.",
+                                    "items": {
+                                        "type": "object",
+                                        "properties": {
+                                            "if": {
+                                                "type": "string",
+                                                "description": "The ensure rule to add into the prompt to trigger this state, always starts as if, eg. {{user}} and {{char}} are alone together"
+                                            }
+                                        }
+                                    },
+                                    "minItems": 1
+                                },
+                                "manual_relievers": {
+                                    "type": "array",
+                                    "description": "Manual relievers that can deactivate this state.",
+                                    "items": {
+                                        "type": "object",
+                                        "properties": {
+                                            "if": {
+                                                "type": "string",
+                                                "description": "The ensure rule to add into the prompt to relieve this state, always starts as if, eg. {{user}} comforts {{char}}"
+                                            }
+                                        }
+                                    },
+                                    "minItems": 1
+                                }
+                            },
+                            "required": [
+                                "description"
+                            ]
+                        }
+                    }
+                },
+                "required": [
+                    "min_bond_level",
+                    "max_bond_level",
+                    "min_2nd_bond_level",
+                    "max_2nd_bond_level"
+                ]
+            },
+            "minItems": 1
+        },
+        "dead_ends": {
+            "title": "Character Dead Ends",
+            "description": "Defines the dead ends associated with the character.",
+            "type": "object",
+            "additionalProperties": {
+                "type": "object",
+                "properties": {
+                    "description": {
+                        "type": "string",
+                        "description": "The description of the dead end scenario, use {{char}} and {{user}} as placeholders."
+                    },
+                    "whole_run": {
+                        "type": "boolean",
+                        "description": "Indicates if this dead end ends the whole run (aka. the story)."
+                    },
+                    "manual_check": {
+                        "type": "boolean",
+                        "description": "Indicates if this dead end requires a manual check to trigger. If no manual check is provided, it will only trigger if it's in a bond"
+                    },
+                    "manual_check_description": {
+                        "type": "string",
+                        "description": "The description for the manual check, use {{char}} and {{user}} as placeholders."
+                    }
+                },
+                "required": [
+                    "description",
+                    "whole_run"
+                ]
+            }
+        },
+        "emotions": {
+            "title": "Character Emotions",
+            "description": "Defines the emotions associated with the character.",
+            "type": "object",
+            "additionalProperties": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "The name of the emotion."
+                    },
+                    "common": {
+                        "type": "boolean",
+                        "description": "Indicates if this emotion is commonly experienced by the character."
+                    },
+                    "triggered_by_states": {
+                        "type": "array",
+                        "description": "States that can trigger this emotion.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "state": {
+                                    "type": "string"
+                                },
+                                "chance": {
+                                    "type": "number",
+                                    "minimum": 0,
+                                    "maximum": 1
+                                },
+                                "min_bond_level": {
+                                    "type": "integer",
+                                    "minimum": -100,
+                                    "maximum": 100
+                                },
+                                "max_bond_level": {
+                                    "type": "integer",
+                                    "minimum": -100,
+                                    "maximum": 100
+                                },
+                                "min_2nd_bond_level": {
+                                    "type": "integer",
+                                    "minimum": -100,
+                                    "maximum": 100
+                                },
+                                "max_2nd_bond_level": {
+                                    "type": "integer",
+                                    "minimum": -100,
+                                    "maximum": 100
+                                }
+                            },
+                            "required": [
+                                "state",
+                                "chance"
+                            ]
+                        },
+                        "minItems": 1
+                    },
+                    "triggers_states": {
+                        "type": "array",
+                        "description": "States that are triggered by this emotion.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "state": {
+                                    "type": "string"
+                                },
+                                "intensity": {
+                                    "type": "number",
+                                    "minimum": 0,
+                                    "maximum": 4
+                                },
+                                "chance": {
+                                    "type": "number",
+                                    "minimum": 0,
+                                    "maximum": 1
+                                },
+                                "min_bond_level": {
+                                    "type": "integer",
+                                    "minimum": -100,
+                                    "maximum": 100
+                                },
+                                "max_bond_level": {
+                                    "type": "integer",
+                                    "minimum": -100,
+                                    "maximum": 100
+                                },
+                                "min_2nd_bond_level": {
+                                    "type": "integer",
+                                    "minimum": -100,
+                                    "maximum": 100
+                                },
+                                "max_2nd_bond_level": {
+                                    "type": "integer",
+                                    "minimum": -100,
+                                    "maximum": 100
+                                }
+                            },
+                            "required": [
+                                "state",
+                                "chance",
+                                "intensity"
+                            ]
+                        }
+                    },
+                    "relieves_states": {
+                        "type": "array",
+                        "description": "States that are relieved by this emotion.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "state": {
+                                    "type": "string"
+                                },
+                                "intensity_loss": {
+                                    "type": "number",
+                                    "minimum": -4,
+                                    "maximum": 0
+                                },
+                                "chance": {
+                                    "type": "number",
+                                    "minimum": 0,
+                                    "maximum": 1
+                                },
+                                "min_bond_level": {
+                                    "type": "integer",
+                                    "minimum": -100,
+                                    "maximum": 100
+                                },
+                                "max_bond_level": {
+                                    "type": "integer",
+                                    "minimum": -100,
+                                    "maximum": 100
+                                },
+                                "min_2nd_bond_level": {
+                                    "type": "integer",
+                                    "minimum": -100,
+                                    "maximum": 100
+                                },
+                                "max_2nd_bond_level": {
+                                    "type": "integer",
+                                    "minimum": -100,
+                                    "maximum": 100
+                                }
+                            },
+                            "required": [
+                                "state",
+                                "chance",
+                                "intensity_loss"
+                            ]
+                        }
+                    }
+                },
+                "required": [
+                    "name"
+                ]
+            }
+        }
+    },
+    "required": [
+        "states",
+        "bonds",
+        "general",
+        "initiative"
+    ]
+}

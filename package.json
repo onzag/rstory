@@ -1,0 +1,24 @@
+{
+  "name": "dream-engine",
+  "version": "1.0.0",
+  "description": "AI Engine created based on the prototype that worked as proof of concept, now written as an electron NodeJS app that can be used to create stories and mix and match them.",
+  "homepage": "https://github.com/onzag/rstory#readme",
+  "bugs": {
+    "url": "https://github.com/onzag/rstory/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/onzag/rstory.git"
+  },
+  "license": "ISC",
+  "author": "",
+  "type": "commonjs",
+  "main": "js/electron.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "electron ."
+  },
+  "devDependencies": {
+    "electron": "^39.2.7"
+  }
+}
