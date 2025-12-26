@@ -1,4 +1,4 @@
-{
+export default {
     "title": "Character Schema",
     "type": "object",
     "properties": {
@@ -6,6 +6,15 @@
             "type": "string",
             "title": "Character Name",
             "description": "The name of the character.",
+            "placeholder": "Alice",
+            "maxLength": 100,
+            "minLength": 1
+        },
+        "group": {
+            "type": "string",
+            "title": "Character Group",
+            "description": "The group the character belongs to, used for organizing characters into folders.",
+            "placeholder": "default",
             "maxLength": 100,
             "minLength": 1
         },
@@ -34,53 +43,63 @@
             "title": "General Information",
             "description": "Describes the character general behaviour and personality, it is in YOU format, you are, you do, as {{char}}",
             "maxLength": 1000,
-            "minLength": 50
+            "minLength": 50,
+            "placeholder": "You are {{char}} a brave and adventurous explorer, always seeking new challenges and experiences.\n\nYou have a strong sense of justice and are willing to help those in need.",
+            "multiline": true
         },
         "short": {
             "type": "string",
             "title": "Short Description",
-            "description": "A short description of the character, used in lists and overviews.",
+            "description": "A short mostly physical (on the surface) description of the character, used in lists and overviews.",
             "maxLength": 250,
-            "minLength": 20
+            "minLength": 20,
+            "placeholder": "A muscular woman with short brown hair and green eyes, wearing a leather jacket and boots."
         },
         "initiative": {
             "type": "float",
             "title": "Character Initiative",
-            "description": "A value between 0 and 1 that determines how often the character takes initiative in conversations.",
+            "description": "A percentage that determines how often per turn the character takes initiative in conversations he is directly not being addressed at",
             "minimum": 0,
-            "maximum": 1
+            "maximum": 1,
+            "default": 0.2
         },
         "stranger_initiative": {
             "type": "float",
             "title": "Stranger Initiative",
-            "description": "A value between 0 and 1 that determines how often the character takes initiative in conversations with strangers, initializing a stranger bond",
+            "description": "A percentage that determines how often per turn the character takes initiative in conversations with strangers",
             "minimum": 0,
-            "maximum": 1
+            "maximum": 1,
+            "default": 0.05
         },
         "left_behind_lost_potential": {
             "type": "float",
             "minimum": 0,
             "maximum": 1,
             "title": "Left Behind Lost Potential",
-            "description": "When a character is left behind, this value determines a random roll, per inference for the character to get lost at the location, not being there anymore"
+            "description": "When a character is left behind, this value determines a random roll, per inference for the character to get lost at the location, not being there anymore",
+            "default": 0.05
         },
         "left_behind_remove_states": {
             "type": "array",
             "title": "Left Behind Remove States",
             "description": "States that are removed from the character when they are left behind.",
             "items": {
-                "type": "string"
-            },
-            "minItems": 1
+                "type": "string",
+                "title": "State Name",
+                "description": "The name of the state to remove when the character is left behind.",
+                "is_state": true
+            }
         },
         "left_behind_add_states": {
             "type": "array",
             "title": "Left Behind Add States",
             "description": "States that are added to the character when they are left behind.",
             "items": {
-                "type": "string"
-            },
-            "minItems": 1
+                "type": "string",
+                "title": "State Name",
+                "description": "The name of the state to add when the character is left behind.",
+                "is_state": true
+            }
         },
         "left_behind_lost_remove_states": {
             "type": "array",
@@ -88,8 +107,7 @@
             "description": "States that are removed from the character when they are left behind and they get lost.",
             "items": {
                 "type": "string"
-            },
-            "minItems": 1
+            }
         },
         "left_behind_lost_add_states": {
             "type": "array",

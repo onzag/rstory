@@ -1,5 +1,8 @@
 // import dialog
 import './components/dialog.js';
+import './components/overlay.js';
+import './components/settings.js';
+import './components/character.js';
 
 // Sound effects
 const hoverSound = document.getElementById('hoverSound');
@@ -36,15 +39,13 @@ function exitGame() {
     dialog.setAttribute("confirm-text", "Exit");
     dialog.setAttribute("cancel-text", "Cancel");
     dialog.addEventListener('confirm', () => {
-        if (window.electronAPI) {
-            window.electronAPI.closeApp();
-        } else {
-            window.close();
-        }
+        window.electronAPI.closeApp();
     });
     dialog.addEventListener('cancel', () => {
         document.body.removeChild(dialog);
-        HAS_ACTIVE_DIALOG = false;
+        setTimeout(() => {
+            HAS_ACTIVE_DIALOG = false;
+        }, 100);
     });
     document.body.appendChild(dialog);
 }
@@ -60,6 +61,35 @@ exitBtn.addEventListener('click', function() {
     exitGame();
 });
 
+const newCharacterBtn = document.getElementById('new-character-btn');
+newCharacterBtn.addEventListener('click', async () => {
+    HAS_ACTIVE_DIALOG = true;
+    const rs = await window.electronAPI.createEmptyCharacterFile();
+    const overlay = document.createElement("app-character");
+    overlay.setAttribute("character-group", rs.group);
+    overlay.setAttribute("character-file", rs.characterFile);
+    document.body.appendChild(overlay);
+    overlay.addEventListener('close', () => {
+        document.body.removeChild(overlay);
+        setTimeout(() => {
+            HAS_ACTIVE_DIALOG = false;
+        }, 300);
+    });
+});
+
+const openSettingsBtn = document.getElementById('open-settings-btn');
+openSettingsBtn.addEventListener('click', function() {
+    HAS_ACTIVE_DIALOG = true;
+    const overlay = document.createElement("app-settings");
+    document.body.appendChild(overlay);
+    overlay.addEventListener('close', () => {
+        document.body.removeChild(overlay);
+        setTimeout(() => {
+            HAS_ACTIVE_DIALOG = false;
+        }, 300);
+    });
+});
+
 // Get all footer links and add event listeners
 const footerLinks = document.querySelectorAll('.footer a');
 footerLinks.forEach(link => {
@@ -72,12 +102,12 @@ footerLinks.forEach(link => {
 // Toggle full screen on alt+Enter
 document.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && e.altKey) {
-        window.electronAPI?.toggleFullScreen();
+        window.electronAPI.toggleFullScreen();
         // Force focus on body to trigger repaint
         
     }
     if (e.key === "F12") {
-        window.electronAPI?.openDevTools();
+        window.electronAPI.openDevTools();
     }
     if (e.key === "Escape" && !HAS_ACTIVE_DIALOG) {
         exitGame();

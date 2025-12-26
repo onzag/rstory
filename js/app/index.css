@@ -5,6 +5,25 @@
   user-select: none;
 }
 
+/* Scrollbar styling - applies to ALL scrollable elements */
+*::-webkit-scrollbar {
+  width: 12px !important;
+}
+
+*::-webkit-scrollbar-track {
+  background: rgba(100, 0, 200, 0.3) !important;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: rgba(50, 0, 100, 0.8) !important;
+  border: 1px solid #ccc !important;
+  border-radius: 6px !important;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: rgba(70, 0, 140, 0.9) !important;
+}
+
 @font-face {
   font-family: 'Sigma';
   src: url('./fonts/SigmarOne-Regular.ttf') format('truetype');
@@ -28,6 +47,24 @@ html, body {
   height: 100%;
   overflow: hidden;
   font-family: 'Cabin Sketch', sans-serif;
+}
+
+*::-webkit-scrollbar {
+  width: 12px;
+}
+
+*::-webkit-scrollbar-track {
+  background: rgba(100, 0, 200, 0.3);
+}
+
+*::-webkit-scrollbar-thumb {
+  background: rgba(50, 0, 100, 0.8);
+  border: 1px solid #ccc;
+  border-radius: 6px;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: rgba(70, 0, 140, 0.9);
 }
 
 .blur-underlay {

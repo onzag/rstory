@@ -1,5 +1,6 @@
 const cancelSound = document.getElementById('cancelSound');
 const pauseSound = document.getElementById('pauseSound');
+const hoverSound = document.getElementById('hoverSound');
 
 function playCancelSound() {
   cancelSound.currentTime = 0;
@@ -9,6 +10,11 @@ function playCancelSound() {
 function playPauseSound() {
   pauseSound.currentTime = 0;
   pauseSound.play().catch(err => console.log('Pause sound play failed:', err));
+}
+
+function playHoverSound() {
+  hoverSound.currentTime = 0;
+  hoverSound.play().catch(err => console.log('Hover sound play failed:', err));
 }
 
 class Dialog extends HTMLElement {
@@ -34,6 +40,11 @@ class Dialog extends HTMLElement {
         if (this.getAttribute('confirmation') === 'true') {
             this.shadowRoot.getElementById('confirm-btn').addEventListener('click', this.onAcceptButtonClick);
             this.shadowRoot.getElementById('cancel-btn').addEventListener('click', this.onCancelButtonClick);
+            this.shadowRoot.getElementById('confirm-btn').focus();
+
+            this.shadowRoot.querySelectorAll('.dialog-buttons div').forEach(btn => {
+                btn.addEventListener('mouseenter', playHoverSound);
+            });
         }
     }
 
@@ -88,16 +99,33 @@ class Dialog extends HTMLElement {
 
         this.shadowRoot.innerHTML = `
       <style>
+      *::-webkit-scrollbar {
+  width: 12px !important;
+}
+
+*::-webkit-scrollbar-track {
+  background: rgba(100, 0, 200, 0.3) !important;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: rgba(50, 0, 100, 0.8) !important;
+  border: 1px solid #ccc !important;
+  border-radius: 6px !important;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: rgba(70, 0, 140, 0.9) !important;
+}
         .dialog {
             position: fixed;
             width: 90%;
             max-width: 60vw;
             background: rgba(0, 0, 0, 0.5);
             color: white;
-            padding: 2vh;
+            padding: 5vh;
             border-radius: 1vh;
             box-shadow: 0 0 2vh rgba(0, 0, 0, 0.5);
-            z-index: 10;
+            z-index: 50;
             left: 50%;
             transform: translate(-50%, -50%);
             top: 50%;
@@ -112,7 +140,7 @@ class Dialog extends HTMLElement {
             height: 100%;
             background: rgba(0, 0, 0, 0.5);
             backdrop-filter: blur(4px);
-            z-index: 5;
+            z-index: 35;
         }
         .dialog-title {
             font-size: 5vh;
@@ -124,6 +152,8 @@ class Dialog extends HTMLElement {
         }
         .dialog-content {
             font-size: 2vh;
+            max-height: 60vh;
+            overflow-y: auto;
         }
         .dialog-buttons {
             display: flex;
@@ -135,7 +165,7 @@ class Dialog extends HTMLElement {
             font-size: 5vh;
             cursor: pointer;
         }
-        .dialog-buttons div:hover {
+        .dialog-buttons div:hover, .dialog-buttons div:focus, .dialog-buttons div:active {
             color: #FF6B6B;
         }
       </style>
