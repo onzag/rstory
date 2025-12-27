@@ -13,12 +13,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     closeApp: () => {
         ipcRenderer.send('closeApp');
     },
-    loadStringFromUserData: async (key, group, characterFile) => {
-        const result = await ipcRenderer.invoke('loadStringFromUserData', key, group, characterFile);
+    loadValueFromUserData: async (key, characterFile) => {
+        const result = await ipcRenderer.invoke('loadValueFromUserData', key, characterFile);
         return result;
     },
-    setStringIntoUserData: async (key, group, characterFile, value) => {
-        await ipcRenderer.invoke('setStringIntoUserData', key, group, characterFile, value);
+    setValueIntoUserData: async (key, characterFile, value) => {
+        await ipcRenderer.invoke('setValueIntoUserData', key, characterFile, value);
     },
     saveSettingsToDisk: () => {
         ipcRenderer.send('saveSettingsToDisk');
@@ -28,31 +28,24 @@ contextBridge.exposeInMainWorld('electronAPI', {
         const result = await ipcRenderer.invoke('createEmptyCharacterFile');
         return result;
     },
-    checkCharacterFileExists: async (group, characterFile) => {
-        const result = await ipcRenderer.invoke('checkCharacterFileExists', group, characterFile);
+    checkCharacterFileExists: async (characterFile) => {
+        const result = await ipcRenderer.invoke('checkCharacterFileExists', characterFile);
         return result;
     },
-    updateCharacterFileFromCache: async (originalGroup, originalCharacterFile, newCharacterFile) => {
-        const result = await ipcRenderer.invoke('updateCharacterFileFromCache', originalGroup, originalCharacterFile, newCharacterFile);
-        if (originalCharacterFile !== newCharacterFile || originalGroup !== newGroup) {
-            await ipcRenderer.invoke('deleteCharacterFile', originalGroup, originalCharacterFile);
-        }
+    updateCharacterFileFromCache: async (characterFile) => {
+        const result = await ipcRenderer.invoke('updateCharacterFileFromCache', characterFile);
         return result;
     },
-    loadCharacterFile: async (group, characterFile) => {
-        const result = await ipcRenderer.invoke('loadCharacterFile', group, characterFile);
+    loadCharacterFile: async (characterFile) => {
+        const result = await ipcRenderer.invoke('loadCharacterFile', characterFile);
         return result;
     },
-    deleteCharacterFile: async (group, characterFile) => {
-        const result = await ipcRenderer.invoke('deleteCharacterFile', group, characterFile);
+    deleteCharacterFile: async (characterFile) => {
+        const result = await ipcRenderer.invoke('deleteCharacterFile', characterFile);
         return result;
     },
-    deleteAllCharacterFilesInGroup: async (group) => {
-        const result = await ipcRenderer.invoke('deleteAllCharacterFilesInGroup', group);
-        return result;
-    },
-    listCharacterFiles: async (group) => {
-        const result = await ipcRenderer.invoke('listCharacterFiles', group);
+    listCharacterFiles: async () => {
+        const result = await ipcRenderer.invoke('listCharacterFiles');
         return result;
     },
     listCharacterGroups: async () => {

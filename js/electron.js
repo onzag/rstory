@@ -85,27 +85,24 @@ ipcMain.on('closeApp', () => {
   app.quit();
 });
 
-ipcMain.handle('loadStringFromUserData', async (event, key, group, characterFile) => {
+ipcMain.handle('loadValueFromUserData', async (event, key, characterFile) => {
     const splitted = key.split(".");
     let current = userData;
-    if (group && characterFile) {
-        if (!CHARACTER_CACHE[group]) {
-            CHARACTER_CACHE[group] = {};
-        }
+    if (characterFile) {
         let notFoundInCache = false;
-        if (!CHARACTER_CACHE[group][characterFile]) {
-            CHARACTER_CACHE[group][characterFile] = {};
+        if (!CHARACTER_CACHE[characterFile]) {
+            CHARACTER_CACHE[characterFile] = {};
             notFoundInCache = true;
         }
         if (notFoundInCache) {
             const CHARACTER_FOLDER = path.join(app.getPath('home'), '.dreamengine', 'characters');
-            const filePath = path.join(CHARACTER_FOLDER, group, characterFile);
+            const filePath = path.join(CHARACTER_FOLDER, characterFile);
             if (fs.existsSync(filePath)) {
                 const data = await fs.promises.readFile(filePath, 'utf-8');
-                CHARACTER_CACHE[group][characterFile] = JSON.parse(data);
+                CHARACTER_CACHE[characterFile] = JSON.parse(data);
             }
         }
-        current = CHARACTER_CACHE[group][characterFile] || {};
+        current = CHARACTER_CACHE[characterFile] || {};
     }
     for (let i = 0; i < splitted.length; i++) {
         if (current[splitted[i]] === undefined) {
@@ -116,17 +113,14 @@ ipcMain.handle('loadStringFromUserData', async (event, key, group, characterFile
     return current || null;
 });
 
-ipcMain.handle('setStringIntoUserData', (event, key, group, characterFile, value) => {
+ipcMain.handle('setValueIntoUserData', (event, key, characterFile, value) => {
     const splitted = key.split(".");
     let current = userData;
-    if (group && characterFile) {
-        if (!CHARACTER_CACHE[group]) {
-            CHARACTER_CACHE[group] = {};
+    if (characterFile) {
+        if (!CHARACTER_CACHE[characterFile]) {
+            CHARACTER_CACHE[characterFile] = {};
         }
-        if (!CHARACTER_CACHE[group][characterFile]) {
-            CHARACTER_CACHE[group][characterFile] = {};
-        }
-        current = CHARACTER_CACHE[group][characterFile];
+        current = CHARACTER_CACHE[characterFile];
     }
     for (let i = 0; i < splitted.length - 1; i++) {
         if (current[splitted[i]] === undefined) {
@@ -148,93 +142,76 @@ const CHARACTER_FOLDER = path.join(app.getPath('home'), '.dreamengine', 'charact
 if (!fs.existsSync(CHARACTER_FOLDER)) {
     fs.mkdirSync(CHARACTER_FOLDER, { recursive: true });
 }
-
-async function createGroupIfNotExists(group) {
-    const groupPath = path.join(CHARACTER_FOLDER, group);
-    if (!fs.existsSync(groupPath)) {
-        CHARACTER_CACHE[group] = {};
-        await fs.promises.mkdir(groupPath, { recursive: true });
-    }
+const CHARACTER_ASSETS_FOLDER = path.join(app.getPath('home'), '.dreamengine', 'characters-assets');
+if (!fs.existsSync(CHARACTER_ASSETS_FOLDER)) {
+    fs.mkdirSync(CHARACTER_ASSETS_FOLDER, { recursive: true });
 }
+
+// let's load every single chracter file into cache on startup
+// they are relatively small so this should be fine
+const chars = fs.readdirSync(CHARACTER_FOLDER);
+chars.forEach(file => {
+    if (file.endsWith('.json')) {
+        const filePath = path.join(CHARACTER_FOLDER, file);
+        const data = fs.readFileSync(filePath, 'utf-8');
+        CHARACTER_CACHE[file] = JSON.parse(data);
+    }
+});
 
 // Character file management IPC handlers
 ipcMain.handle('createEmptyCharacterFile', async () => {
-    await createGroupIfNotExists('default');
-    const filePath = path.join(CHARACTER_FOLDER, 'default', `unnamed_character_${Date.now()}.json`);
-    await fs.promises.writeFile(filePath, JSON.stringify({}, null, 2), 'utf-8');
-    CHARACTER_CACHE["default"] = CHARACTER_CACHE["default"] || {};
-    CHARACTER_CACHE["default"][path.basename(filePath)] = {};
-    return { group: 'default', characterFile: path.basename(filePath) };
+    const filePath = path.join(CHARACTER_FOLDER, `character_${Date.now()}.json`);
+    CHARACTER_CACHE[path.basename(filePath)] = {
+        __unsaved: true
+    };
+    return { group: '', characterFile: path.basename(filePath) };
 });
 
-ipcMain.handle('checkCharacterFileExists', async (event, group, characterFile) => {
-    const filePath = path.join(CHARACTER_FOLDER, group, characterFile);
-    return fs.existsSync(filePath);
+ipcMain.handle('checkCharacterFileExists', async (event, characterFile) => {
+    return !!CHARACTER_CACHE[characterFile];
 });
 
-ipcMain.handle('updateCharacterFileFromCache', async (event, originalGroup, originalCharacterFile, newCharacterFile) => {
-    const currentData = CHARACTER_CACHE[originalGroup][originalCharacterFile]
-    const newGroup = (currentData.group || "default").trim();
-    if (originalGroup !== currentData.group) {
-        await createGroupIfNotExists(newGroup);
+ipcMain.handle('updateCharacterFileFromCache', async (event, characterFile) => {
+    const currentData = CHARACTER_CACHE[characterFile];
+    if (!currentData) {
+        return null;
     }
-    const filePath = path.join(CHARACTER_FOLDER, newGroup, newCharacterFile);
+    if (currentData.__unsaved) {
+        delete currentData.__unsaved;
+    }
+    const filePath = path.join(CHARACTER_FOLDER, characterFile);
     await fs.promises.writeFile(filePath, JSON.stringify(currentData, null, 2), 'utf-8');
-    delete CHARACTER_CACHE[originalGroup]?.[originalCharacterFile];
-    CHARACTER_CACHE[currentData.group] = CHARACTER_CACHE[currentData.group] || {};
-    CHARACTER_CACHE[currentData.group][newCharacterFile] = currentData;
-    return true;
+    return currentData;
 });
 
-ipcMain.handle("deleteCharacterFile", async (event, group, characterFile) => {
-    const filePath = path.join(CHARACTER_FOLDER, group, characterFile);
-    delete CHARACTER_CACHE[group]?.[characterFile];
+ipcMain.handle("deleteCharacterFile", async (event, characterFile) => {
+    const filePath = path.join(CHARACTER_FOLDER, characterFile);
+    const assetsFolderPath = path.join(CHARACTER_ASSETS_FOLDER, characterFile.replace('.json', ''));
+    delete CHARACTER_CACHE[characterFile];
     if (fs.existsSync(filePath)) {
         await fs.promises.unlink(filePath);
         return true;
     }
-    return false;
-});
-
-ipcMain.handle("deleteAllCharacterFilesInGroup", async (event, group) => {
-    const groupPath = path.join(CHARACTER_FOLDER, group);
-    delete CHARACTER_CACHE[group];
-    if (fs.existsSync(groupPath)) {
-        const files = await fs.promises.readdir(groupPath);
-        for (const file of files) {
-            const filePath = path.join(groupPath, file);
-            await fs.promises.unlink(filePath);
-        }
-        await fs.promises.rmdir(groupPath);
-        return true;
+    if (fs.existsSync(assetsFolderPath)) {
+        fs.rmdirSync(assetsFolderPath, { recursive: true });
     }
+
     return false;
 });
 
-ipcMain.handle('loadCharacterFile', async (event, group, characterFile) => {
-    const filePath = path.join(CHARACTER_FOLDER, group, characterFile);
-    CHARACTER_CACHE[group] = CHARACTER_CACHE[group] || {};
-    if (CHARACTER_CACHE[group][characterFile]) {
-        return CHARACTER_CACHE[group][characterFile];
+ipcMain.handle('loadCharacterFile', async (event, characterFile) => {
+    const filePath = path.join(CHARACTER_FOLDER, characterFile);
+    if (CHARACTER_CACHE[characterFile]) {
+        return CHARACTER_CACHE[characterFile];
     }
     if (fs.existsSync(filePath)) {
         const data = await fs.promises.readFile(filePath, 'utf-8');
-        CHARACTER_CACHE[group][characterFile] = JSON.parse(data);
-        return CHARACTER_CACHE[group][characterFile];
+        CHARACTER_CACHE[characterFile] = JSON.parse(data);
+        return CHARACTER_CACHE[characterFile];
     }
     return null;
 });
 
-ipcMain.handle('listCharacterFiles', async (event, group) => {
-    const groupPath = path.join(CHARACTER_FOLDER, group);
-    if (fs.existsSync(groupPath)) {
-        const files = await fs.promises.readdir(groupPath);
-        return files.filter(file => file.endsWith('.json'));
-    }
-    return [];
-});
-
-ipcMain.handle('listCharacterGroups', async () => {
-    const groups = await fs.promises.readdir(CHARACTER_FOLDER, { withFileTypes: true });
-    return groups.filter(dirent => dirent.isDirectory()).map(dirent => dirent.name);
+ipcMain.handle('listCharacterFiles', async (event) => {
+    return Object.keys(CHARACTER_CACHE);
 });

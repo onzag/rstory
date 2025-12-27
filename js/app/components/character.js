@@ -2,7 +2,13 @@ import schema from '../schema/character.js';
 import { character, party, world, utils } from '../schema/variables.js';
 
 function escapeHTML(str) {
-    return str.replace(/[&<>"']/g, function(match) {
+    if (typeof str === "undefined" || str === null) {
+        return '';
+    }
+    if (typeof str !== 'string') {
+        return str;
+    }
+    return str.replace(/[&<>"']/g, function (match) {
         const escapeMap = {
             '&': '&amp;',
             '<': '&lt;',
@@ -14,25 +20,473 @@ function escapeHTML(str) {
     });
 }
 
+const BASIC_STATES = (child, non_sapient_animal, extra_sfw, extra_nsfw) => ({
+    "Hungry": {
+        "general_description": child ?
+            "{{char}} is feeling hungry and needs to eat, {{char_pronoun}} may become cranky if not fed in time, {{char_pronoun}} will seek out for their caregiver or trusted adult to provide food for {{char_object_pronoun}}" :
+            "{{char}} feels the need for food to sustain their energy and health",
+        "random_spawn_rate": 0.01,
+        "automatic_trigger": true,
+        "automatic_reliever": false,
+        "manual_relievers": [
+            "{{char}} has had a meal or snack",
+        ],
+        "triggers_states_on_relief": [
+            child ? {"state": "Tired", "intensity": 1} : null,
+            {"state": "Satisfied", "intensity": 2},
+        ],
+        "decay_rate_per_inference": 0,
+    },
+    "Thirsty": {
+        "general_description": child ? 
+            "{{char}} is feeling thirsty and needs to drink, {{char_pronoun}} may become cranky if not given water in time, {{char_pronoun}} will seek out for their caregiver or trusted adult to provide water for {{char_object_pronoun}}" :
+            "{{char}} feels the need for water to stay hydrated",
+        "random_spawn_rate": 0.03,
+        "automatic_trigger": true,
+        "automatic_reliever": false,
+        "manual_relievers": [
+            "{{char}} has had a drink of water or any beverage",
+            "{{char}} has eaten food with high water content",
+        ],
+        "triggers_states_on_relief": [
+            {"state": "Satisfied", "intensity": 2},
+        ],
+        "decay_rate_per_inference": 0,
+    },
+    "Tired": {
+        "general_description": "{{char}} feels the need for rest or sleep to recover energy",
+        "automatic_trigger": true,
+        "automatic_reliever": true,
+        "decay_rate_per_inference": 0,
+        "manual_relievers": [
+            "{{char}} has had a bit of rest or a short nap",
+        ],
+    },
+    "Determined": {
+        "general_description": "{{char}} is resolute and unwavering in their goals or actions",
+        "automatic_trigger": true,
+        "automatic_reliever": true,
+        "decay_rate_per_inference": 1,
+        "bond_mini": true,
+    },
+    "Wants Play": child ? {
+        "general_description": "{{char}} feels the need to engage in playful activities and have fun, {{char_pronoun}} may seek out toys or games and look for their caregiver or trusted adult to join in the playtime",
+        "automatic_trigger": true,
+        "automatic_reliever": true,
+        "decay_rate_per_inference": 1,
+    } : null,
+    "Protective": child ? null : {
+        "general_description":
+            `{{#with (get_present_party 0 100 0 100) as |party|}}
+    {{#if (gt (length party) 0)}}
+        {{char}} feels a strong urge to safeguard and defend {{format_and party}} from harm
+    {{#else}}
+        {{char}} feels protective but has none worth protecting currently
+    {{/if}}
+{{/with}}`,
+        "automatic_trigger": true,
+        "automatic_reliever": true,
+        "decay_rate_per_inference": 1,
+    },
+    "Caring": child ? null :{
+        "general_description": 
+`{{char}} shows kindness and concern towards
+{{#with (get_all_character_state_causants "Caring") as |cared_party|}}
+{{#if (gt (length cared_party) 0)}}{{format_and cared_party}}{{else}}others{{/if}}{{/with}}`,
+        "automatic_trigger": true,
+        "automatic_reliever": true,
+        "decay_rate_per_inference": 1,
+        "track_causants": true,
+    },
+    "Scared": {
+        "general_description":
+            `{{char}} feels fear or anxiety about potential threats or dangers
+{{#with (get_all_character_state_causants "Scared") as |negative_party|}}
+    {{#if (gt (length negative_party) 0)}}
+        , especially from {{format_or negative_party}}
+    {{/if}}
+{{/with}}`,
+        "automatic_trigger": true,
+        "automatic_reliever": true,
+        "decay_rate_per_inference": 1,
+    },
+    "Lonely": {
+        "general_description": "{{char}} feels a sense of isolation and a desire for companionship",
+        "automatic_trigger": true,
+        "automatic_reliever": true,
+        "decay_rate_per_inference": 0,
+    },
+    "Desperate": {
+        "general_description": "{{char}} feels a sense of urgency and hopelessness in their situation",
+        "automatic_trigger": true,
+        "automatic_reliever": true,
+        "decay_rate_per_inference": 1,
+    },
+    "Stressed": {
+        "general_description": "{{char}} feels overwhelmed and anxious due to pressure or challenges",
+        "automatic_trigger": true,
+        "automatic_reliever": true,
+        "decay_rate_per_inference": 1,
+    },
+    "Aroused": extra_sfw || child ? null : {
+        "general_description":
+            non_sapient_animal ? 
+            `{{char}} feels a heightened sexual drive and instinctual urge to mate, driven by primal instincts rather than complex emotions {{char_pronoun}} may become aggressive towards others` :
+            `{{char}} feels a heightened sense of sexual desire
+{{#with (get_present_party 0 100 25 100) as |attractive_party|}}
+    {{#if (gt (length attractive_party) 0)}} towards {{format_and attractive_party}}
+        {{#with (get_difference_of_present_party attractive_party) as |unattractive_party|}}
+            {{#if (gt (length unattractive_party) 0)}}
+                {{char}} will not accept any sexual advances from {{format_or unattractive_party}}
+            {{/if}}
+        {{/with}}
+    {{#else}}
+        , but none {{char_pronoun}} is intested with is currently present; {{char}} will keep {{char_possessive}} sexual urges to {{char_reflexive_pronoun}} and react to sexual advances by anyone negatively
+    {{/if}}
+{{/with}}`,
+        "causant_min_bond_required": 0,
+        "causant_max_bond_required": 100,
+        "causant_min_2_bond_required": 25,
+        "causant_max_2_bond_required": 100,
+        "automatic_trigger": true,
+        "automatic_reliever": true,
+        "decay_rate_per_inference": 1,
+        "bond_mini": true,
+        "track_causants": true,
+    },
+    "Anxious": {
+        "general_description": "{{char}} feels uneasy and worried about upcoming events or situations",
+        "automatic_trigger": true,
+        "automatic_reliever": true,
+        "decay_rate_per_inference": 1,
+    },
+    "Loving": child ? null :{
+        "general_description":
+            `{{char}} feels love and care
+{{{#with (get_present_party 25 100 15 100) as |loved_party|}}
+    {{#if (gt (length loved_party) 0)}}
+        towards {{format_and loved_party}}; {{char}} will not show or take affection from anyone else and react negatively
+    {{#else}}
+        , but none {{char_pronoun}} cares about is currently available for {{char_object_pronoun}};
+        {{char}} will not accept affection from anyone
+    {{/if}}
+{{/with}}`,
+        "automatic_trigger": true,
+        "automatic_reliever": true,
+        "decay_rate_per_inference": 1,
+        "bond_mini": true,
+    },
+    "Needs affection": {
+        "general_description":
+        child ? "{{char}} has a strong desire for affection and closeness from their caregiver or trusted adult to feel safe and secure, {{char_pronoun}} will not receive affection from anyone else and react negatively" :
+            `{{char}} has a strong desire for affection and closeness
+{{{#with (get_present_party 25 100 15 100) as |loved_party|}}
+    {{#if (gt (length loved_party) 0)}}
+        from {{format_and loved_party}}; {{char}} will not receive affection from anyone else and react negatively
+    {{#else}}
+        , but none {{char_pronoun}} cares about is currently available for {{char_object_pronoun}};
+        {{char}} will not accept affection from anyone
+    {{/if}}
+{{/with}}`,
+        "automatic_trigger": true,
+        "automatic_reliever": true,
+        "decay_rate_per_inference": 1,
+        "bond_mini": true,
+    },
+    "Satisfied": {
+        "general_description": "{{char}} feels content and fulfilled after having their needs met",
+        "automatic_trigger": true,
+        "automatic_reliever": true,
+        "decay_rate_per_inference": 1,
+    },
+    "Embarrassed": {
+        "general_description": 
+`{{char}} feels self-conscious and uneasy due to
+{{#with (get_all_character_state_causants "Embarrassed") as |embarrassing_party|}}
+    {{#if (in embarrassing_party char)}}
+        something {{char_pronoun}} did {{char_reflexive_pronoun}}
+    {{else if (gt (length embarrassing_party) 0)}}
+        what {{format_and embarrassing_party}} said or did
+    {{else}}
+        a recent awkward situation or event
+    {{/if}}
+{{/with}}`,
+        "automatic_trigger": true,
+        "automatic_reliever": true,
+        "track_causants": true,
+        "decay_rate_per_inference": 1,
+    },
+    "Angry": {
+        "general_description": `
+{{char}} feels strong displeasure or hostility
+{{#with (get_all_character_state_causants "Angry") as |angry_party|}}
+    {{#if (gt (length angry_party) 0)}}
+        towards {{format_and angry_party}}
+    {{else}}
+        about a frustrating situation or event
+    {{/if}}
+{{/with}}`,
+        "automatic_trigger": true,
+        "automatic_reliever": true,
+        "manual_relievers": [
+            "{{char}} has calmed down after expressing their anger",
+            "{{char}} has been apologized to or reconciled with those they were angry at",
+        ],
+        "track_causants": true,
+    },
+
+    // Extra NSFW states
+    "Sexually Frustrated": extra_nsfw && !extra_sfw && !child && !non_sapient_animal ? {
+        "general_description": 
+`{{char}} feels a strong sense of sexual frustration due to unmet desires as
+{{#with (get_present_party 0 100 25 100) as |attractive_party|}}
+    {{#if (gt (length attractive_party) 0)}} towards {{format_and attractive_party}}
+        {{#with (get_difference_of_present_party attractive_party) as |unattractive_party|}}
+            {{#if (gt (length unattractive_party) 0)}}
+                ; {{char}} will not accept any sexual advances from {{format_or unattractive_party}}
+            {{/if}}
+        {{/with}}
+    {{#else}}
+        , but none {{char_pronoun}} is intested with is currently present; {{char}} will keep {{char_possessive}} sexual urges to {{char_reflexive_pronoun}} and react to sexual advances by anyone negatively
+    {{/if}}
+{{/with}}`,
+        "automatic_trigger": true,
+        "automatic_reliever": true,
+        "decay_rate_per_inference": 1,
+    } : null,
+    "Having Sex": extra_nsfw && !extra_sfw && !child && !non_sapient_animal ? {
+        "general_description": `{{char}} is currently engaged in sexual activity`,
+        "automatic_trigger": false,
+        "automatic_reliever": false,
+        "decay_rate_per_inference": 0,
+        "manual_relievers": [
+            "{{char}} has finished having sex",
+        ],
+        "manual_triggers": [
+            "{{char}} is engaging in sexual activity",
+        ],
+        "triggers_states_on_relief": [
+            {"state": "Satisfied", "intensity": 3},
+        ],
+        "bond_mini": true,
+        "triggers_states": [
+            {"state": "Aroused", "intensity": 4},
+            {"state": "Loving", "intensity": 1},
+        ],
+        "has_custom_viewables": true,
+        "custom_viewables_priority": 10,
+        "describes_action": true,
+    } : null,
+    "Having an Orgasm": extra_nsfw && !extra_sfw && !child && !non_sapient_animal ? {
+        "general_description": `{{char}} is currently experiencing an orgasm`,
+        "automatic_trigger": false,
+        "automatic_reliever": false,
+        "decay_rate_per_inference": 0,
+        "describes_action": true,
+        "manual_triggers": [
+            "{{char}} is experiencing an orgasm",
+        ],
+        "manual_relievers": [
+            "{{char}} has finished experiencing an orgasm",
+        ],
+        "bond_mini": true,
+        "triggers_states": [
+            {"state": "Aroused", "intensity": 4},
+        ],
+        "has_custom_viewables": true,
+        "custom_viewables_priority": 15,
+        "describes_action": true,
+    } : null,
+
+    // Injury and Death related states
+    "Injured": {
+        "general_description":
+`{{char}} is hurt or wounded, which may affect their physical abilities and overall well-being
+{{#with (get_all_character_state_causants "Injured") as |injury_party|}}
+    {{#if (gt (length injury_party) 0)}}
+        , {{char}} will retaliate against {{format_and injury_party}} if given the chance
+    {{/if}}
+{{/with}}`,
+        "automatic_trigger": false,
+        "automatic_reliever": false,
+        "manual_triggers": [
+            "{{char}} has sustained an injury or wound",
+            "{{char}} has been in an accident or fight",
+        ],
+        "manual_relievers": [
+            "{{char}} has received medical attention or treatment for their injuries",
+        ],
+        "relieving_description": "{{char}}'s injuries have been treated and are healing",
+        "relief_uses_decay_rate": true,
+        "decay_rate_after_relief": 0.1,
+        "injury_and_death": true,
+        "track_causants": true,
+    },
+    "Permanently Injured": {
+        "general_description": "{{char}} has sustained permanent damage or impairment to their body, which may affect their physical abilities and overall well-being",
+        "automatic_trigger": false,
+        "automatic_reliever": false,
+        "starting_intensity": 4,
+        "triggers_dead_end": "{{char}}'s permanent injury has led to severe complications resulting in death",
+        "dead_end_is_death": true,
+        "triggers_dead_end_random_chance": 0.05,
+        "triggers_dead_end_while_relieving_random_chance": 0.02,
+        "manual_triggers": [
+            "{{char}} has sustained permanent damage or impairment to their body"
+        ],
+        "manual_relievers": [
+            "{{char}} has undergone surgery or medical procedure to address the permanent injury",
+        ],
+        "permanent": true,
+        "relief_uses_decay_rate": true,
+        "decay_rate_after_relief": 0.1,
+        "injury_and_death": true,
+    },
+    "Received Gunshot": {
+        "general_description": "{{char}} has been shot with a gun, which may cause serious injury or death if not treated promptly",
+        "automatic_trigger": false,
+        "automatic_reliever": false,
+        "starting_intensity": 4,
+        "injury_and_death": true,
+        "triggers_dead_end": "{{char}}'s wound has led to severe complications resulting in death",
+        "dead_end_is_death": true,
+        "triggers_dead_end_random_chance": 0.1,
+        "triggers_dead_end_while_relieving_random_chance": 0.02,
+        "manual_triggers": [
+            "{{char}} has been shot with a gun"
+        ],
+        "manual_relievers": [
+            "{{char}} has received emergency medical treatment for the gunshot wound",
+        ],
+        "decay_rate_per_inference": 0.1,
+    },
+    "Received Mortal Wound": {
+        "general_description": "{{char}} has sustained a life-threatening injury resulting in a mortal wound",
+        "automatic_trigger": false,
+        "automatic_reliever": false,
+        "starting_intensity": 4,
+        "injury_and_death": true,
+        "triggers_dead_end": "{{char}}'s mortal wound has led to death",
+        "dead_end_is_death": true,
+        "manual_triggers": [
+            "{{char}} has sustained a mortal wound with no chance of survival",
+        ],
+    }
+});
+
+const CHARACTER_PRESETS = [
+    [
+        "Adult/Sapient Beast/Humanoid",
+        "An adult human being or creature.",
+        {
+            "general":
+                `((Describe the character physical appearance, clothing, and demeanor in detail.
+Include information about their height, build, hair color, eye color, and any distinguishing features.
+Mention their typical clothing style and accessories.))
+
+{{{#with (get_present_party 25 100 25 100) as |loved_party|}}
+    {{#if (gt (length loved_party) 0)}}
+        {{char}} is currently in a relationship with {{format_and loved_party}}, and {{char_pronoun}} shows visible signs of affection and attachment towards {{format_object_pronoun loved_party}}, they will not accept sexual or romantic advances from anyone else.
+    {{/if}}
+{{/with}}`,
+            "states": BASIC_STATES,
+        }
+    ],
+    [
+        "Animal/Beast (Sapient, Mute)",
+        "An animal or beast, sapient.",
+        {
+            "general":
+                `((Describe the character physical appearance, and demeanor in detail.
+Include information about their behavior))
+
+{{char}} possesses human-like intelligence but does not speak, ensure to only use asterisks "*" to denote actions and sounds they make.
+
+{{#with (get_present_party 25 100 25 100) as |loved_party|}}
+    {{#if (gt (length loved_party) 0)}}
+        {{char}} is currently in a relationship with {{format_and loved_party}}, and {{char_pronoun}} shows visible signs of affection and attachment towards {{format_object_pronoun loved_party}}, they will not accept sexual or romantic advances from anyone else.
+    {{/if}}
+{{/with}}`,
+            "states": BASIC_STATES,
+        }
+    ],
+    [
+        "Child",
+        "A young human being or creature",
+        {
+            "general":
+                `((Describe the character physical appearance, clothing, and demeanor in detail.
+Include information about their height, build, hair color, eye color, and any distinguishing features.
+Mention their typical clothing style and accessories.))
+
+{{char}} is a child and behaves accordingly and seeks for guidance and care from adults they trust around them.
+
+{{char}} is a child and does not accept any sexual or romantic advances from anyone, and will react negatively to such advances.`,
+        }
+    ],
+    [
+        "Animal/Beast (Non-sapient)",
+        "An animal or beast, non-human and non-sapient.",
+        {
+            "general":
+                `((Describe the character physical appearance, and demeanor in detail.
+Include information about their behavior))
+
+{{char}} is a non-sapient animal or beast and as a result they do not possess human-like intelligence and do not speak, ensure to only use asterisks "*" to denote actions and sounds they make.
+
+{{char}} is driven primarily by instinct and basic needs such as hunger, safety, and reproduction.
+
+{{char}} does not accept any sexual or romantic advances from anyone, and will react negatively to such advances.`,
+        }
+    ],
+]
+
 const WIZARD_SECTIONS = [
     {
         title: "Basic Information",
         fields: [
-            "Character Overview",
             [
-                "name",
-                "group",
-                "gender",
-                "sex",
-                "general",
-                "short"
+                "Character Overview",
+                [
+                    "name",
+                    "group",
+                    "gender",
+                    "sex",
+                    "general",
+                    "short"
+                ],
             ],
-            "Initiative",
             [
-                
+                "Initiative and Behaviour",
+                [
+                    "initiative",
+                    "stranger_initiative",
+                    "stranger_rejection",
+                    "autistic_response",
+                    "schizophrenia",
+                ],
             ]
         ]
-    }
+    },
+    {
+        title: "States",
+        description: "States are not emotions, they are mental or physical conditions that affect your character's behavior and interactions. They can influence how your character reacts to situations and other characters.\n\n" +
+            "Note that each state behavioural effect must be defined in the character bonds section. For example, if your character has the 'needs_affection' state, you should define how other characters respond to this state in their bonds towards your character. Some characters may be stoic and not show it, while others may display it more openly. This adds depth to character interactions and relationships and is defined by the bond strength and type.\n\n" +
+            "A state or behaviour that isn't defined here does not mean the character won't display it, that depends on the underlying AI Model, you should always ensure to deny behaviours or states that you don't want explicilty in the bonds section; having the behaviours that you want as states just helps to guide the AI better and adds depth to the character; but it is not a strict limitation, for that reason be sure to limit unwanted behaviours in the bonds section.",
+        fields: []
+    },
+    {
+        title: "Emotions",
+        fields: []
+    },
+    {
+        title: "Bonds",
+        fields: []
+    },
+    {
+        title: "Misc",
+        fields: []
+    },
 ]
 
 // Sound effects
@@ -42,23 +496,23 @@ const cancelSound = document.getElementById('cancelSound');
 const pauseSound = document.getElementById('pauseSound');
 
 function playHoverSound() {
-  hoverSound.currentTime = 0;
-  hoverSound.play().catch(err => console.log('Hover sound play failed:', err));
+    hoverSound.currentTime = 0;
+    hoverSound.play().catch(err => console.log('Hover sound play failed:', err));
 }
 
 function playConfirmSound() {
-  confirmSound.currentTime = 0;
-  confirmSound.play().catch(err => console.log('Confirm sound play failed:', err));
+    confirmSound.currentTime = 0;
+    confirmSound.play().catch(err => console.log('Confirm sound play failed:', err));
 }
 
 function playCancelSound() {
-  cancelSound.currentTime = 0;
-  cancelSound.play().catch(err => console.log('Cancel sound play failed:', err));
+    cancelSound.currentTime = 0;
+    cancelSound.play().catch(err => console.log('Cancel sound play failed:', err));
 }
 
 function playPauseSound() {
-  pauseSound.currentTime = 0;
-  pauseSound.play().catch(err => console.log('Pause sound play failed:', err));
+    pauseSound.currentTime = 0;
+    pauseSound.play().catch(err => console.log('Pause sound play failed:', err));
 }
 
 class CharacterOverlay extends HTMLElement {
@@ -70,14 +524,10 @@ class CharacterOverlay extends HTMLElement {
     }
 
     connectedCallback() {
-        this.currentCharacterGroup = this.getAttribute("character-group") || "default";
         this.currentCharacterFile = this.getAttribute("character-file") || null;
-
-        this.lastSavedCharacterGroup = this.currentCharacterGroup;
-        this.lastSavedCharacterFile = this.currentCharacterFile;
         this.currentCharacterName = "";
 
-        window.electronAPI.loadStringFromUserData("name", this.currentCharacterGroup, this.currentCharacterFile).then((name) => {
+        window.electronAPI.loadValueFromUserData("name", this.currentCharacterFile).then((name) => {
             if (name) {
                 this.currentCharacterName = name;
             } else {
@@ -145,101 +595,90 @@ class CharacterOverlay extends HTMLElement {
             this.dispatchEvent(new CustomEvent('close'));
             playConfirmSound();
         });
+        this.shadowRoot.querySelector('app-overlay-tabs').addEventListener('tab-change', (e) => {
+            this.currentSectionIndex = e.detail.newIndex;
+            this.buildChildrenMap();
+        });
     }
 
     buildChildrenMap() {
         const sectionToDisplay = WIZARD_SECTIONS[this.currentSectionIndex];
         const fields = sectionToDisplay.fields;
-        const fieldsAsHTML = fields.map(fieldName => {
-            if (schema.properties[fieldName].type === "string") {
-                if (schema.properties[fieldName].enum) {
-                    // It's a select input
-                    return `<app-overlay-select
-                                class="${fieldName}"
-                                label="${escapeHTML(schema.properties[fieldName].title)}" 
-                                title="${escapeHTML(schema.properties[fieldName].description || '')}" 
-                                input-data-location="${fieldName}"
-                                input-data-character-group="${this.currentCharacterGroup}"
-                                input-data-character-file="${this.currentCharacterFile}"
-                                input-options='${JSON.stringify(schema.properties[fieldName].enum)}'>
-                            </app-overlay-select>`;
-                } else {
-                    // It's a text input
-                    const isMultiline = schema.properties[fieldName].multiline || false;
+        const fieldsAsHTML = fields.map(fieldGroup => {
+            const fieldName = fieldGroup[0];
+            const groupFields = fieldGroup[1];
+            const fieldsHTML = groupFields.map(fieldName => {
+                if (schema.properties[fieldName].type === "string") {
+                    if (schema.properties[fieldName].enum) {
+                        // It's a select input
+                        return `<app-overlay-select
+                                    class="${fieldName}"
+                                    label="${escapeHTML(schema.properties[fieldName].title)}" 
+                                    title="${escapeHTML(schema.properties[fieldName].description || '')}" 
+                                    input-data-location="${fieldName}"
+                                    input-data-character-file="${this.currentCharacterFile}"
+                                    input-options='${JSON.stringify(schema.properties[fieldName].enum)}'
+                                    input-default-value="${escapeHTML(schema.properties[fieldName].default || '')}"
+                                >
+                                </app-overlay-select>`;
+                    } else {
+                        // It's a text input
+                        const isMultiline = schema.properties[fieldName].multiline || false;
+                        return `<app-overlay-input
+                                    class="${fieldName}"
+                                    label="${escapeHTML(schema.properties[fieldName].title)}" 
+                                    title="${escapeHTML(schema.properties[fieldName].description || '')}" 
+                                    input-data-location="${fieldName}"
+                                    input-data-character-file="${this.currentCharacterFile}"
+                                    input-placeholder="${escapeHTML(schema.properties[fieldName].placeholder || '')}"
+                                    input-default-value="${escapeHTML(schema.properties[fieldName].default || '')}"
+                                    ${isMultiline ? 'multiline="true"' : ''}>
+                                </app-overlay-input>`;
+                    }
+                } else if (schema.properties[fieldName].type === "number") {
                     return `<app-overlay-input
-                                class="${fieldName}"
-                                label="${escapeHTML(schema.properties[fieldName].title)}" 
-                                title="${escapeHTML(schema.properties[fieldName].description || '')}" 
-                                input-data-location="${fieldName}"
-                                input-data-character-group="${this.currentCharacterGroup}"
-                                input-data-character-file="${this.currentCharacterFile}"
-                                input-placeholder="${escapeHTML(schema.properties[fieldName].placeholder || '')}"
-                                ${isMultiline ? 'multiline="true"' : ''}>
-                            </app-overlay-input>`;
+                                    class="${fieldName}"
+                                    label="${escapeHTML(schema.properties[fieldName].title)}" 
+                                    title="${escapeHTML(schema.properties[fieldName].description || '')}"
+                                    input-type="number"
+                                    input-number-min="${schema.properties[fieldName].minimum !== undefined ? schema.properties[fieldName].minimum : ''}"
+                                    input-number-max="${schema.properties[fieldName].maximum !== undefined ? schema.properties[fieldName].maximum : ''}"
+                                    input-data-location="${fieldName}"
+                                    input-data-character-file="${this.currentCharacterFile}"
+                                    input-placeholder="${escapeHTML(schema.properties[fieldName].placeholder || '')}"
+                                    input-default-value="${escapeHTML(schema.properties[fieldName].default)}"
+                                    input-is-percentage="${schema.properties[fieldName].percentage ? 'true' : ''}"
+                                >
+                                </app-overlay-input>`;
                 }
-            }
+            }).join('');
+
+            return `<app-overlay-section section-title="${escapeHTML(fieldName)}">${fieldsHTML}</app-overlay-section>`;
         }).join('');
 
-        this.shadowRoot.querySelector('app-overlay').innerHTML = `<app-overlay-section section-title="${WIZARD_SECTIONS[this.currentSectionIndex].title}">${fieldsAsHTML}</app-overlay-section>`;
-
-        if (this.currentSectionIndex === 0) {
-            this.shadowRoot.querySelector('.name').shadowRoot.querySelector('input').addEventListener('input', (e) => {
-                this.currentCharacterName = e.target.value;
-                this.currentCharacterFile = e.target.value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_') + ".json";
-            });
-            this.shadowRoot.querySelector('.group').shadowRoot.querySelector('input').addEventListener('input', (e) => {
-                this.currentCharacterGroup = e.target.value;
-            });
-        }
+        this.shadowRoot.querySelector('app-overlay-tabs').innerHTML = fieldsAsHTML;
     }
 
     async saveCurrent() {
-        if (await window.electronAPI.checkCharacterFileExists(this.currentCharacterGroup.trim() || "default", this.currentCharacterFile)) {
-            // Show overwrite dialog
-            const dialog = document.createElement('app-dialog');
-            dialog.setAttribute('dialog-title', 'A character with this name in that group already exists. Do you want to overwrite it?');
-            dialog.setAttribute("confirmation", "true");
-            dialog.setAttribute("confirm-text", "Overwrite");
-            dialog.setAttribute("cancel-text", "Cancel");
-            this.shadowRoot.appendChild(dialog);
-            dialog.addEventListener('confirm', async () => {
-                await this.updateCharacterFileOnDisk();
-                this.shadowRoot.removeChild(dialog);
-                playConfirmSound();
-            });
-            dialog.addEventListener('cancel', () => {
-                this.shadowRoot.removeChild(dialog);
-                playCancelSound();
-            });
-            this.shadowRoot.appendChild(dialog);
-        } else {
-            this.updateCharacterFileOnDisk();
-            playConfirmSound();
-        }
+        this.updateCharacterFileOnDisk();
+        playConfirmSound();
     }
 
     async updateCharacterFileOnDisk() {
         // save each field
-        await Promise.all(Array.from(this.shadowRoot.querySelectorAll('app-overlay-input')).map(inputComponent => 
+        await Promise.all(Array.from(this.shadowRoot.querySelectorAll('app-overlay-input')).map(inputComponent =>
             inputComponent.saveValueToUserData()
         ));
 
         await Promise.all(Array.from(this.shadowRoot.querySelectorAll('app-overlay-select')).map(selectComponent => {
             return selectComponent.saveValueToUserData();
         }));
-        
+
         await window.electronAPI.updateCharacterFileFromCache(
-            this.lastSavedCharacterGroup.trim() || "default",
-            this.lastSavedCharacterFile,
             this.currentCharacterFile
-        ).then(() => {
-            if ((this.lastSavedCharacterGroup.trim() || "default") !== (this.currentCharacterGroup.trim() || "default") || this.lastSavedCharacterFile !== this.currentCharacterFile) {
-                this.lastSavedCharacterGroup = this.currentCharacterGroup;
-                this.lastSavedCharacterFile = this.currentCharacterFile;
-                // Rebuild children map to update data-location attributes
-                this.buildChildrenMap();
-                this.shadowRoot.querySelector('app-overlay').setAttribute("overlay-title", `Working on: ${JSON.stringify(escapeHTML(this.currentCharacterName))}`);
-            }
+        ).then((characterFileContents) => {
+            this.currentCharacterName = characterFileContents.name || this.currentCharacterName;
+            this.shadowRoot.querySelector('app-overlay').setAttribute("overlay-title", `Working on: ${JSON.stringify(escapeHTML(this.currentCharacterName))}`);
         });
     }
 
@@ -249,6 +688,8 @@ class CharacterOverlay extends HTMLElement {
                 @import "./components/character.css";
             </style>
             <app-overlay overlay-title="Working on: ${JSON.stringify(escapeHTML(this.currentCharacterName))}" confirm-text="Apply Changes" cancel-text="Go Back" special-button-text="Help">
+                <app-overlay-tabs current="${this.currentSectionIndex}" sections='${JSON.stringify(WIZARD_SECTIONS.map(section => section.title))}'>
+                </app-overlay-tabs>
             </app-overlay>
         `;
     }

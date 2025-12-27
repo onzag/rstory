@@ -1,8 +1,20 @@
 const hoverSound = document.getElementById('hoverSound');
+const confirmSound = document.getElementById('confirmSound');
+const cancelSound = document.getElementById('cancelSound');
 
 function playHoverSound() {
     hoverSound.currentTime = 0;
     hoverSound.play().catch(err => console.log('Hover sound play failed:', err));
+}
+
+function playConfirmSound() {
+  confirmSound.currentTime = 0;
+  confirmSound.play().catch(err => console.log('Confirm sound play failed:', err));
+}
+
+function playCancelSound() {
+  cancelSound.currentTime = 0;
+  cancelSound.play().catch(err => console.log('Cancel sound play failed:', err));
 }
 
 class Overlay extends HTMLElement {
@@ -260,6 +272,24 @@ class OverlayInput extends HTMLElement {
     connectedCallback() {
         this.render();
 
+        const isNumber = this.getAttribute('input-type') === 'number';
+        const isPercentage = this.getAttribute('input-is-percentage') === 'true';
+
+        if (this.getAttribute("input-default-value")) {
+            const inputElement = this.shadowRoot.querySelector('input, textarea');
+            if (isNumber) {
+                const numericValue = parseFloat(this.getAttribute("input-default-value"));
+                if (isPercentage) {
+                    inputElement.value = (numericValue * 100).toString();
+                } else {
+                    inputElement.value = numericValue.toString();
+                }
+            } else {
+                inputElement.value = this.getAttribute("input-default-value");
+            }
+            this.originalValue = this.getAttribute("input-default-value");
+        }
+
         const textarea = this.shadowRoot.querySelector('textarea');
         if (textarea) {
             // Measure placeholder height
@@ -275,10 +305,16 @@ class OverlayInput extends HTMLElement {
             });
         }
 
-        window.electronAPI.loadStringFromUserData(this.getAttribute('input-data-location'), this.getAttribute("input-data-character-group"), this.getAttribute("input-data-character-file")).then((value) => {
+        window.electronAPI.loadValueFromUserData(this.getAttribute('input-data-location'), this.getAttribute("input-data-character-file")).then((value) => {
             if (value !== null) {
-                const potentialTextArea = this.shadowRoot.querySelector('input, textarea').value = value;
-                this.originalValue = value;
+                const potentialTextArea = this.shadowRoot.querySelector('input, textarea');
+                if (isPercentage && isNumber) {
+                    const numberValue = parseFloat(value);
+                    potentialTextArea.value = (numberValue * 100).toString();
+                } else {
+                    potentialTextArea.value = value.toString();
+                }
+                this.originalValue = value.toString();
 
                 if (potentialTextArea && this.getAttribute('multiline') === 'true') {
                     textarea.style.height = 'auto';
@@ -289,8 +325,19 @@ class OverlayInput extends HTMLElement {
     }
 
     async saveValueToUserData() {
-        const value = this.shadowRoot.querySelector('input, textarea').value;
-        await window.electronAPI.setStringIntoUserData(this.getAttribute('input-data-location'), this.getAttribute("input-data-character-group"), this.getAttribute("input-data-character-file"), value);
+        let value = this.shadowRoot.querySelector('input, textarea').value;
+        const type = this.getAttribute('input-type') || 'text';
+        const isPercentage = this.getAttribute('input-is-percentage') === 'true';
+        if (type === 'number') {
+            value = parseFloat(value);
+            if (isNaN(value)) {
+                value = 0;
+            }
+            if (isPercentage) {
+                value = value / 100;
+            }
+        }
+        await window.electronAPI.setValueIntoUserData(this.getAttribute('input-data-location'), this.getAttribute("input-data-character-file"), value);
     }
 
     hasBeenModified() {
@@ -303,8 +350,28 @@ class OverlayInput extends HTMLElement {
         const type = this.getAttribute('input-type') || 'text';
         const placeholder = this.getAttribute('input-placeholder') || '';
         const multiline = this.getAttribute('multiline') === 'true';
+        let wrapperClass = "input-wrapper";
+        if (multiline) {
+            wrapperClass += " textarea-wrapper";
+        }
 
-        const inputItself = multiline ? `<textarea placeholder="${placeholder}"></textarea>` : `<input type="${type}" placeholder="${placeholder}" />`;
+        let extraAttributes = "";
+        if (type === 'number') {
+            const min = this.getAttribute('input-number-min');
+            const max = this.getAttribute('input-number-max');
+            if (min !== null && min !== '') {
+                extraAttributes += ` min="${min}"`;
+            }
+            if (max !== null && max !== '') {
+                extraAttributes += ` max="${max}"`;
+            }
+
+            if (this.getAttribute('input-is-percentage') === 'true') {
+                wrapperClass += ` percent-input`;
+            }
+        }
+
+        const inputItself = multiline ? `<textarea placeholder="${placeholder}"></textarea>` : `<input type="${type}" placeholder="${placeholder}" ${extraAttributes} />`;
 
         this.shadowRoot.innerHTML = `
       <style>
@@ -331,10 +398,47 @@ class OverlayInput extends HTMLElement {
             color: white;
             resize: none;
         }
+        .error-message {
+            font-size: 4vh;
+            height: 4vh;
+            text-align: left;
+            color: #FF6B6B;
+        }
+            input::-webkit-inner-spin-button,
+input::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.input-wrapper {
+    position: relative;
+    display: block;
+    width: 100%;
+    margin: 0;
+    padding: 0;
+}
+
+.input-wrapper input, .input-wrapper textarea {
+    width: 100%   
+}
+
+.input-wrapper.percent-input::after {
+  content: '%';
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  pointer-events: none;
+  color: #FF6B6B;
+  font-weight: bold;
+}
       </style>
       <div class="overlay-input">
         <label>${label}</label>
-        ${inputItself}
+        <div class="${wrapperClass}">
+            ${inputItself}
+        </div>
+        <div class="error-message"></div>
       </div>
     `;
     }
@@ -352,7 +456,13 @@ class OverlayInputSelect extends HTMLElement {
     connectedCallback() {
         this.render();
 
-        window.electronAPI.loadStringFromUserData(this.getAttribute('input-data-location'), this.getAttribute("input-data-character-group"), this.getAttribute("input-data-character-file")).then((value) => {
+        if (this.getAttribute("input-default-value")) {
+            const inputElement = this.shadowRoot.querySelector('input, textarea');
+            inputElement.value = this.getAttribute("input-default-value");
+            this.originalValue = this.getAttribute("input-default-value");
+        }
+
+        window.electronAPI.loadValueFromUserData(this.getAttribute('input-data-location'), this.getAttribute("input-data-character-file")).then((value) => {
             if (value !== null) {
                 this.shadowRoot.querySelector('select').value = value;
                 this.originalValue = value;
@@ -362,7 +472,7 @@ class OverlayInputSelect extends HTMLElement {
 
     async saveValueToUserData() {
         const value = this.shadowRoot.querySelector('select').value;
-        await window.electronAPI.setStringIntoUserData(this.getAttribute('input-data-location'), this.getAttribute("input-data-character-group"), this.getAttribute("input-data-character-file"), value.trim());
+        await window.electronAPI.setValueIntoUserData(this.getAttribute('input-data-location'), this.getAttribute("input-data-character-file"), value.trim());
     }
 
     hasBeenModified() {
@@ -408,12 +518,19 @@ class OverlayInputSelect extends HTMLElement {
   border: 1px solid #ccc;
   cursor: pointer;
         }
+  .error-message {
+            font-size: 4vh;
+            height: 4vh;
+            text-align: left;
+            color: #FF6B6B;
+        }
       </style>
       <div class="overlay-input">
         <label>${label}</label>
         <select value="">
             ${options.map(opt => `<option value="${opt}">${opt[0].toUpperCase() + opt.slice(1)}</option>`).join('')}
         </select>
+        <div class="error-message"></div>
       </div>
     `;
     }
@@ -453,3 +570,99 @@ customElements.define('app-overlay-select', OverlayInputSelect);
 customElements.define('app-overlay-input-warning', OverlayInputWarning);
 customElements.define('app-overlay-input', OverlayInput);
 customElements.define('app-overlay-section', OverlaySection);
+
+class OverlayTabs extends HTMLElement {
+    constructor() {
+        super();
+        this.attachShadow({ mode: 'open' });
+
+        this.onTabClick = this.onTabClick.bind(this);
+    }
+
+    connectedCallback() {
+        this.render();
+
+        this.shadowRoot.querySelectorAll('.tab').forEach((tab, index) => {
+            tab.addEventListener('click', (e) => {
+                if (!tab.classList.contains('active')) {
+                    this.onTabClick(index);
+                    playConfirmSound();
+                } else {
+                    playCancelSound();
+                }
+            });
+            tab.addEventListener('mouseenter', playHoverSound);
+        });
+    }
+
+    onTabClick(index) {
+        const current = parseInt(this.getAttribute('current')) || 0;
+        this.dispatchEvent(new CustomEvent('tab-change', {
+            detail: {
+                newIndex: index
+            }
+        }));
+        this.shadowRoot.querySelectorAll('.tab').forEach((tab, tabIndex) => {
+            if (tabIndex === index) {
+                tab.classList.add('active');
+            } else {
+                tab.classList.remove('active');
+            }
+        });
+    }
+
+    render() {
+        const sections = JSON.parse(this.getAttribute('sections') || '[]');
+        const current = parseInt(this.getAttribute('current')) || 0;
+
+        this.shadowRoot.innerHTML = `
+      <style>
+        .tabs {
+            display: flex;
+            border-bottom: solid 2px #ccc;
+            background-color: rgba(255,255,255, 0.1);
+            overflow-x: auto;
+        }
+            .tabs::-webkit-scrollbar {
+  height: 12px !important;
+}
+
+.tabs::-webkit-scrollbar-track {
+  background: rgba(100, 0, 200, 0.3) !important;
+}
+
+.tabs::-webkit-scrollbar-thumb {
+  background: rgba(50, 0, 100, 0.8) !important;
+  border: 1px solid #ccc !important;
+  border-radius: 6px !important;
+}
+
+.tabs::-webkit-scrollbar-thumb:hover {
+  background: rgba(70, 0, 140, 0.9) !important;
+}
+        .tab {
+            padding: 2vh 4vh;
+            font-size: 3vh;
+            cursor: pointer;
+        }
+        .tab.active {
+            border-bottom: solid 4px #FF6B6B;
+            font-weight: bold;
+        }
+        .tab:hover {
+            color: #FF6B6B;
+        }
+      </style>
+      <div class="tabs-container">
+      <div class="tabs">
+        ${sections.map((section, index) => `
+            <div class="tab ${index === current ? 'active' : ''}">${section}</div>
+        `).join('')}
+      </div>
+      <slot></slot>
+      </div>
+    `;
+    }
+}
+
+customElements.define('app-overlay-tabs', OverlayTabs);

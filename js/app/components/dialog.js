@@ -1,6 +1,7 @@
 const cancelSound = document.getElementById('cancelSound');
 const pauseSound = document.getElementById('pauseSound');
 const hoverSound = document.getElementById('hoverSound');
+const confirmSound = document.getElementById('confirmSound');
 
 function playCancelSound() {
   cancelSound.currentTime = 0;
@@ -15,6 +16,11 @@ function playPauseSound() {
 function playHoverSound() {
   hoverSound.currentTime = 0;
   hoverSound.play().catch(err => console.log('Hover sound play failed:', err));
+}
+
+function playConfirmSound() {
+  confirmSound.currentTime = 0;
+  confirmSound.play().catch(err => console.log('Confirm sound play failed:', err));
 }
 
 class Dialog extends HTMLElement {

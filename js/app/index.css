@@ -5,6 +5,17 @@
   user-select: none;
 }
 
+input {
+  -moz-appearance: textfield;
+}
+
+/* Hide default spinner buttons */
+input::-webkit-inner-spin-button,
+input::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
 /* Scrollbar styling - applies to ALL scrollable elements */
 *::-webkit-scrollbar {
   width: 12px !important;
@@ -333,4 +344,8 @@ h1, h2, .menu-btn {
 copyright {
   display: block;
   margin-bottom: 1vh;
+}
+
+#play-btn {
+  font-size: 8vh;
 }

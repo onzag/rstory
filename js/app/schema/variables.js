@@ -2,8 +2,8 @@
 export const character = [
     [
         "user",
-        "The name of the user",
-        "eg. Alex, Vivianna, Connor",
+        "The name of the user, only really useful if they are the chosen one or the likes",
+        "eg. Player",
         (user, character) => user.name,
     ],
     [
@@ -13,22 +13,10 @@ export const character = [
         (user, character) => character.name,
     ],
     [
-        "user_gender",
-        "The gender of the user",
-        "male, female or ambiguous",
-        (user, character) => user.gender.toLowerCase(),
-    ],
-    [
         "char_gender",
         "The gender of the character",
         "male, female or ambiguous",
         (user, character) => character.gender.toLowerCase(),
-    ],
-    [
-        "user_sex",
-        "The sex of the user",
-        "male, female or intersex",
-        (user, character) => user.sex.toLowerCase(),
     ],
     [
         "char_sex",
@@ -37,22 +25,10 @@ export const character = [
         (user, character) => character.sex.toLowerCase(),
     ],
     [
-        "user_pronoun",
-        "The 3rd person pronoun of the user",
-        "he, she or they",
-        (user, character) => user.sex.toLowerCase() === "male" ? "he" : user.sex.toLowerCase() === "female" ? "she" : "they",
-    ],
-    [
         "char_pronoun",
         "The 3rd person pronoun of the character",
         "he, she or they",
         (user, character) => character.sex.toLowerCase() === "male" ? "he" : character.sex.toLowerCase() === "female" ? "she" : "they",
-    ],
-    [
-        "user_possessive",
-        "The possessive pronoun of the user",
-        "his, her or their",
-        (user, character) => user.gender.toLowerCase() === "male" ? "his" : user.gender.toLowerCase() === "female" ? "her" : "their",
     ],
     [
         "char_possessive",
@@ -61,22 +37,10 @@ export const character = [
         (user, character) => character.gender.toLowerCase() === "male" ? "his" : character.gender.toLowerCase() === "female" ? "her" : "their",
     ],
     [
-        "user_object_pronoun",
-        "The object pronoun of the user",
-        "him, her or them",
-        (user, character) => user.gender.toLowerCase() === "male" ? "him" : user.gender.toLowerCase() === "female" ? "her" : "them",
-    ],
-    [
         "char_object_pronoun",
         "The object pronoun of the character",
         "him, her or them",
         (user, character) => character.gender.toLowerCase() === "male" ? "him" : character.gender.toLowerCase() === "female" ? "her" : "them",
-    ],
-    [
-        "user_reflexive_pronoun",
-        "The reflexive pronoun of the user",
-        "himself, herself or themself",
-        (user, character) => user.gender.toLowerCase() === "male" ? "himself" : user.gender.toLowerCase() === "female" ? "herself" : "themself",
     ],
     [
         "char_reflexive_pronoun",
@@ -85,34 +49,10 @@ export const character = [
         (user, character) => character.gender.toLowerCase() === "male" ? "himself" : character.gender.toLowerCase() === "female" ? "herself" : "themself",
     ],
     [
-        "user_ownership_pronoun",
-        "The ownership pronoun of the user",
-        "his, hers or theirs",
-        (user, character) => user.gender.toLowerCase() === "male" ? "his" : user.gender.toLowerCase() === "female" ? "hers" : "theirs",
-    ],
-    [
         "char_ownership_pronoun",
         "The ownership pronoun of the character",
         "his, hers or theirs",
         (user, character) => character.gender.toLowerCase() === "male" ? "his" : character.gender.toLowerCase() === "female" ? "hers" : "theirs",
-    ],
-    [
-        "user_is_male",
-        "Boolean indicating if the user is male",
-        "true or false",
-        (user, character) => user.gender.toLowerCase() === "male",
-    ],
-    [
-        "user_is_female",
-        "Boolean indicating if the user is female",
-        "true or false",
-        (user, character) => user.gender.toLowerCase() === "female",
-    ],
-    [
-        "user_is_ambiguous",
-        "Boolean indicating if the user is of ambiguous gender",
-        "true or false",
-        (user, character) => user.gender.toLowerCase() === "ambiguous",
     ],
     [
         "char_is_male",
@@ -131,24 +71,6 @@ export const character = [
         "Boolean indicating if the character is of ambiguous gender",
         "true or false",
         (user, character) => character.gender.toLowerCase() === "ambiguous",
-    ],
-    [
-        "user_sex_is_male",
-        "Boolean indicating if the user sex is male",
-        "true or false",
-        (user, character) => user.sex.toLowerCase() === "male",
-    ],
-    [
-        "user_sex_is_female",
-        "Boolean indicating if the user sex is female",
-        "true or false",
-        (user, character) => user.sex.toLowerCase() === "female",
-    ],
-    [
-        "user_sex_is_intersex",
-        "Boolean indicating if the user sex is intersex",
-        "true or false",
-        (user, character) => user.sex.toLowerCase() === "intersex",
     ],
     [
         "char_sex_is_male",
@@ -172,34 +94,22 @@ export const character = [
 
 export const party = [
     [
-        "party",
-        "The list of party members",
+        "char_party",
+        "The list of party members (characters wtih a bond with, positive or negative)",
         "eg. [Arya, Thalon, Mira]",
-        (user, character, party) => party.members.map(member => member.name),
+        (user, character, party) => party.forChar[character.name].members.map(member => member.name),
     ],
     [
-        "party_present_members",
-        "The list of present party members",
+        "char_party_present_members",
+        "The list of present party members (present characters the character has a bond with, positive or negative)",
         "eg. [Arya, Thalon]",
-        (user, character, party) => party.members.filter(member => member.isPresent).map(member => member.name),
+        (user, character, party) => party.forChar[character.name].members.filter(member => member.isPresent).map(member => member.name),
     ],
     [
-        "party_leftbehind_members",
-        "The list of left behind party members",
-        "eg. [Mira]",
-        (user, character, party) => party.members.filter(member => !member.isPresent).map(member => member.name),
-    ],
-    [
-        "party_currentlylost_members",
-        "The list of members that got lost after being left behind (known to this member)",
-        "eg. [Mira]",
-        (user, character, party) => party.members.filter(member => !member.isPresent && member.isLost && member.isKnownToBeLostBy.includes(character)).map(member => member.name),
-    ],
-    [
-        "party_ex_members",
+        "user_party_ex_members",
         "The list of ex-party members",
         "eg. [Dorian]",
-        (user, character, party) => party.exMembers.map(member => member.name),
+        (user, character, party) => party.forChar[user.name].exMembers.map(member => member.name),
     ],
     [
         "non_party_members_at_location",
@@ -247,19 +157,19 @@ export const world = [
         (user, character, party, world) => world.inJourney ? world.journey.isCompleted : false,
     ],
     [
-        "current_in_vehicle",
+        "location_is_in_vehicle",
         "Boolean indicating if the party is currently in a vehicle",
         "true or false",
         (user, character, party, world) => world.currentLocation.isVehicle,
     ],
     [
-        "current_in_vehicle_long_distance",
+        "location_is_in_vehicle_long_distance",
         "Boolean indicating if the party is currently in a long-distance capable vehicle",
         "true or false",
         (user, character, party, world) => world.currentLocation.isVehicle && world.currentLocation.isLongDistance,
     ],
     [
-        "current_is_safe_location",
+        "location_is_safe",
         "Boolean indicating if the current location is a safe location",
         "true or false",
         (user, character, party, world) => world.currentLocation.isSafe,
@@ -267,6 +177,123 @@ export const world = [
 ];
 
 export const utils = [
+    [
+        "get_last_state_causant state_name",
+        "The name of the character/user/object that activated the state, it could also be an unspecified non-character or object",
+        "eg. Aria, Thalon, Player",
+        (user, character, party, world, stateName) => {
+            const actualStateName = stateName.trim().toUpperCase().replace(/\s+/, "_");
+            const characterInfo = party.everyone.find(member => member.name === character.name);
+            if (!characterInfo || !characterInfo.stateHistory[actualStateName] || characterInfo.stateHistory[actualStateName].length === 0) {
+                return "";
+            }
+            const activators = characterInfo.currentStates[actualStateName].activatedBy;
+            return activators[activators.length - 1] || "";
+        },
+    ],
+    [
+        "get_all_state_causants state_name",
+        "The name of all characters/users that activated the state, it could also be unspecified non-characters or objects",
+        "eg. [Aria, Thalon, Random Spooky Book]",
+        (user, character, party, world, stateName) => {
+            const actualStateName = stateName.trim().toUpperCase().replace(/\s+/, "_");
+            const characterInfo = party.everyone.find(member => member.name === character.name);
+            if (!characterInfo || !characterInfo.stateHistory[actualStateName] || characterInfo.stateHistory[actualStateName].length === 0) {
+                return "";
+            }
+            const activators = characterInfo.currentStates[actualStateName].activatedBy;
+            return activators;
+        },
+    ],
+    [
+        "get_last_character_state_causant state_name",
+        "The name of the character that activated the state, always ensuring a character is returned",
+        "eg. Aria, Thalon",
+        (user, character, party, world, stateName) => {
+            const characterInfo = party.everyone.find(member => member.name === character.name);
+            if (!characterInfo || !characterInfo.stateHistory[stateName] || characterInfo.stateHistory[stateName].length === 0) {
+                return "";
+            }
+            const activators = characterInfo.currentStates[stateName].activatedBy;
+            activators.filter(activator => {
+                for (const member of party.everyone) {
+                    if (member.name == activator) {
+                        return true;
+                    }
+                }
+                return false;
+            });
+            return activators.length > 0 ? activators[activators.length - 1] : "";
+        },
+    ],
+    [
+        "get_all_character_state_causants state_name",
+        "The of all the character that activated the state, always ensuring a character is returned",
+        "eg. Aria, Thalon",
+        (user, character, party, world, stateName) => {
+            const characterInfo = party.everyone.find(member => member.name === character.name);
+            if (!characterInfo || !characterInfo.stateHistory[stateName] || characterInfo.stateHistory[stateName].length === 0) {
+                return "";
+            }
+            const activators = characterInfo.currentStates[stateName].activatedBy;
+            activators.filter(activator => {
+                for (const member of party.everyone) {
+                    if (member.name == activator) {
+                        return true;
+                    }
+                }
+                return false;
+            });
+            return activators;
+        },
+    ],
+    [
+        "get_party min_bond_level max_bond_level min_2_bond_level max_2_bond_level",
+        "Get the list of party members for the current character",
+        "eg. [Arya, Thalon, Mira]",
+        (user, character, party, world, minBondLevel, maxBondLevel, min2BondLevel, max2BondLevel) => {
+            return party.forChar[character.name].members.filter(member => {
+                const bond = member.bonds[character.name][member.name].bond;
+                const secondaryBond = member.bonds[character.name][member.name].bond_2;
+                return bond >= minBondLevel && bond <= maxBondLevel && secondaryBond >= min2BondLevel && secondaryBond <= max2BondLevel;
+            });
+        }
+    ],
+    [
+        "get_present_party min_bond_level max_bond_level min_2_bond_level max_2_bond_level",
+        "Get the list of party members for the current character",
+        "eg. [Arya, Thalon, Mira]",
+        (user, character, party, world, minBondLevel, maxBondLevel, min2BondLevel, max2BondLevel) => {
+            return party.forChar[character.name].members.filter(member => {
+                const bond = member.bonds[character.name][member.name].bond;
+                const secondaryBond = member.bonds[character.name][member.name].bond_2;
+                return bond >= minBondLevel && bond <= maxBondLevel && secondaryBond >= min2BondLevel && secondaryBond <= max2BondLevel && member.isPresent;
+            });
+        }
+    ],
+    [
+        "get_difference_of_present_party list",
+        "Get the difference between the provided list and the present party members",
+        "eg. [Arya, Thalon]",
+        (user, character, party, world, list) => {
+            const presentMembers = party.forChar[character.name].members.filter(member => member.isPresent).map(member => member.name);
+            return list.filter(name => !presentMembers.includes(name));
+        }
+    ],
+    [
+        "is_dead character",
+        "Boolean indicating if the character is dead",
+        "true or false",
+        (user, character, party, world, characterQuestioned) => {
+            if (!characterQuestioned) return false;
+            for (const member of party.everyone) {
+                if (member.name == characterQuestioned) {
+                    return member.isDead;
+                }
+            }
+            return false;
+        }
+    ],
     [
         "is_male character",
         "Boolean indicating if the character is male",
@@ -380,12 +407,12 @@ export const utils = [
         }
     ],
     [
-        "is_leftbehind_member character",
-        "Boolean indicating if the character is a left behind member of the party",
+        "is_not_present character",
+        "Boolean indicating if the character is not present in the location",
         "true or false",
         (user, character, party, world, characterQuestioned) => {
             if (!characterQuestioned) return false;
-            for (const member of party.members) {
+            for (const member of party.everyone) {
                 if (member.name == characterQuestioned) {
                     return !member.isPresent;
                 }
@@ -394,42 +421,56 @@ export const utils = [
         }
     ],
     [
-        "is_currentlylost_member character",
+        "should_be_at character",
+        "String indicating a location where another character should be at according to the character's knowledge",
+        "true or false",
+        (user, character, party, world, characterQuestioned) => {
+            if (!characterQuestioned) return false;
+            for (const member of party.forChar[character.name]) {
+                if (member.name == characterQuestioned) {
+                    return !member.isPresent ? member.lastKnownLocation : world.currentLocation.name;
+                }
+            }
+            return "";
+        }
+    ],
+    [
+        "is_lost character",
         "Boolean indicating if the character is a member that got lost after being left behind (known to this member)",
         "true or false",
         (user, character, party, world, characterQuestioned) => {
             if (!characterQuestioned) return false;
-            for (const member of party.members) {
+            for (const member of party.forChar[character.name]) {
                 if (member.name == characterQuestioned) {
-                    return !member.isPresent && member.isLost && member.isKnownToBeLostBy.includes(character);
+                    return !member.isPresent && member.isLost;
                 }
             }
             return false;
         }
     ],
     [
-        "is_non_member character",
-        "Boolean indicating if the character is a non-member available in the current location of the world",
+        "does_not_know_character character",
+        "Boolean indicating if the character does not know the questioned character and does not have a bond with them",
         "true or false",
         (user, character, party, world, characterQuestioned) => {
             if (!characterQuestioned) return false;
-            for (const member of party.nonMembers) {
+            for (const member of party.everyone) {
                 if (member.name == characterQuestioned) {
-                    return true;
+                    return member.bonds[character][characterQuestioned].not_met;
                 }
             }
             return false;
         }
     ],
     [
-        "is_ex_member character",
-        "Boolean indicating if the character is an ex-member of the party",
+        "is_strangers_with character",
+        "Boolean indicating if the character has a stranger relationship with the questioned character",
         "true or false",
         (user, character, party, world, characterQuestioned) => {
             if (!characterQuestioned) return false;
-            for (const member of party.exMembers) {
+            for (const member of party.everyone) {
                 if (member.name == characterQuestioned) {
-                    return true;
+                    return member.bonds[character][characterQuestioned].stranger;
                 }
             }
             return false;
@@ -511,5 +552,71 @@ export const utils = [
             if (list.length === 2) return `${list[0]} or ${list[1]}`;
             return `${list.slice(0, -1).join(', ')}, or ${list[list.length - 1]}`;
         }
-    ]
+    ],
+    [
+        "length list",
+        "The length of the list",
+        "eg. 3",
+        (user, character, party, world, list) => {
+            if (!list || typeof list !== "string") return 0;
+            return list.length;
+        }
+    ],
+    [
+        "in value list",
+        "Boolean indicating if the value is in the list",
+        "true or false",
+        (user, character, party, world, value, list) => {
+            if (!list || !Array.isArray(list)) return false;
+            return list.includes(value);
+        }
+    ],
+    [
+        "gt value1 value2",
+        "Boolean indicating if value1 is greater than value2",
+        "true or false",
+        (user, character, party, world, value1, value2) => {
+            return value1 > value2;
+        }
+    ],
+    [
+        "lt value1 value2",
+        "Boolean indicating if value1 is less than value2",
+        "true or false",
+        (user, character, party, world, value1, value2) => {
+            return value1 < value2;
+        }
+    ],
+    [
+        "eq value1 value2",
+        "Boolean indicating if value1 is equal to value2",
+        "true or false",
+        (user, character, party, world, value1, value2) => {
+            return value1 == value2;
+        }
+    ],
+    [
+        "neq value1 value2",
+        "Boolean indicating if value1 is not equal to value2",
+        "true or false",
+        (user, character, party, world, value1, value2) => {
+            return value1 != value2;
+        }
+    ],
+    [
+        "lte value1 value2",
+        "Boolean indicating if value1 is less than or equal to value2",
+        "true or false",
+        (user, character, party, world, value1, value2) => {
+            return value1 <= value2;
+        }
+    ],
+    [
+        "gte value1 value2",
+        "Boolean indicating if value1 is greater than or equal to value2",
+        "true or false",
+        (user, character, party, world, value1, value2) => {
+            return value1 >= value2;
+        }
+    ],
 ];

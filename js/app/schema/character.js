@@ -56,23 +56,52 @@ export default {
             "placeholder": "A muscular woman with short brown hair and green eyes, wearing a leather jacket and boots."
         },
         "initiative": {
-            "type": "float",
+            "type": "number",
             "title": "Character Initiative",
             "description": "A percentage that determines how often per turn the character takes initiative in conversations he is directly not being addressed at",
             "minimum": 0,
             "maximum": 1,
-            "default": 0.2
+            "default": 0.2,
+            "percentage": true,
         },
         "stranger_initiative": {
-            "type": "float",
+            "type": "number",
             "title": "Stranger Initiative",
             "description": "A percentage that determines how often per turn the character takes initiative in conversations with strangers",
             "minimum": 0,
             "maximum": 1,
-            "default": 0.05
+            "default": 0.05,
+            "percentage": true,
+        },
+        "stranger_rejection": {
+            "type": "number",
+            "title": "Stranger Rejection Likelihood",
+            "description": "A percentage that determines how likely is a character to actively reject interactions from strangers, higher values indicate more rejection behaviour; useful for shy or aggressive antisocial characters",
+            "minimum": 0,
+            "maximum": 1,
+            "default": 0.05,
+            "percentage": true,
+        },
+        "autistic_response": {
+            "type": "number",
+            "title": "Autistic Response Likelihood",
+            "description": "A percentage that determines a non-verbal non-social autistic answer, higher values indicate more autistic behaviour; if your character is already non-verbal do not use this; note that this doesn't replace a character being defined as autistic in its description, this is more akin sudden autistic behaviour",
+            "minimum": 0,
+            "maximum": 1,
+            "default": 0,
+            "percentage": true,
+        },
+        "schizophrenia": {
+            "type": "number",
+            "title": "Schizophrenic Response Likelihood",
+            "description": "A percentage that determines the probability to hear voices or see things that are not there, a highly schizophrenic (above 0.5) character will receive a voice effect as a random character, however sometimes a real character may be used",
+            "minimum": 0,
+            "maximum": 1,
+            "default": 0,
+            "percentage": true,
         },
         "left_behind_lost_potential": {
-            "type": "float",
+            "type": "number",
             "minimum": 0,
             "maximum": 1,
             "title": "Left Behind Lost Potential",
@@ -125,6 +154,47 @@ export default {
             "additionalProperties": {
                 "type": "object",
                 "properties": {
+                    "general_description": {
+                        "type": "string",
+                        "title": "General Description",
+                        "description": "A general description of the state, what it means for the character to be in this state. Use {{char}} as a placeholder for the character name.",
+                    },
+                    "relieving_description": {
+                        "type": "string",
+                        "title": "Relieving Description",
+                        "description": "A description of the state when it is being relieved, Use {{char}} as a placeholder for the character name.",
+                        "must_have_bool": "relief_uses_decay_rate"
+                    },
+                    "triggers_dead_end": {
+                        "type": "string",
+                        "title": "Triggers Dead End",
+                        "description": "Describes a dead end that is triggered when this state activates."
+                    },
+                    "dead_end_is_death": {
+                        "type": "boolean",
+                        "title": "Dead End Is Death",
+                        "description": "Indicates if this dead end is a death of character scenario.",
+                        "must_have_string": "triggers_dead_end",
+                    },
+                    "triggers_dead_end_random_chance": {
+                        "type": "number",
+                        "title": "Triggers Dead End Random Chance",
+                        "description": "The chance for this state to trigger the dead end when active per inference",
+                        "minimum": 0,
+                        "maximum": 1,
+                        "percentage": true,
+                        "must_have_string": "triggers_dead_end",
+                    },
+                    "triggers_dead_end_while_relieving_random_chance": {
+                        "type": "number",
+                        "title": "Triggers Dead End While Relieving Random Chance",
+                        "description": "The chance for this state to trigger the dead end while relieving per inference",
+                        "minimum": 0,
+                        "maximum": 1,
+                        "percentage": true,
+                        "must_have_bool": "relief_uses_decay_rate",
+                        "must_have_string": "triggers_dead_end",
+                    },
                     "common_state_experienced_by_character": {
                         "type": "boolean",
                         "description": "Indicates if this state is commonly experienced by the character."
@@ -132,6 +202,13 @@ export default {
                     "has_custom_viewables": {
                         "type": "boolean",
                         "description": "Indicates if this state affects the character's viewables."
+                    },
+                    "custom_viewables_priority": {
+                        "type": "number",
+                        "description": "The priority of the custom viewables for this state, higher values indicate higher priority.",
+                        "minimum": 0,
+                        "maximum": 100,
+                        "must_have_bool": "has_custom_viewables",
                     },
                     "random_spawn_rate": {
                         "type": "number",
@@ -142,6 +219,13 @@ export default {
                     "conflict_states": {
                         "type": "array",
                         "description": "States that conflict with this state, cannot be active at the same time.",
+                        "items": {
+                            "type": "string"
+                        }
+                    },
+                    "required_states": {
+                        "type": "array",
+                        "description": "States that are required for this state to be available.",
                         "items": {
                             "type": "string"
                         }
@@ -188,9 +272,58 @@ export default {
                             ]
                         }
                     },
-                    "disabled_by_default": {
-                        "type": "boolean",
-                        "description": "Indicates if this state is disabled by default, if so it must be enabled by a bond."
+                    "triggers_states_on_relief": {
+                        "type": "array",
+                        "description": "States that are triggered when this state is relieved.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "state": {
+                                    "type": "string"
+                                },
+                                "intensity": {
+                                    "type": "number",
+                                    "minimum": 0,
+                                    "maximum": 4
+                                }
+                            },
+                            "required": [
+                                "state",
+                                "intensity"
+                            ]
+                        }
+                    },
+                    "causant_min_bond_required": {
+                        "type": "number",
+                        "description": "Indicates the minimum bond level required for this state to be activated by a causant.",
+                        "minimum": -100,
+                        "maximum": 100,
+                        "default": -100,
+                        "must_have_bool": "track_causant",
+                    },
+                    "causant_max_bond_required": {
+                        "type": "number",
+                        "description": "Indicates the maximum bond level required for this state to be activated by a causant.",
+                        "minimum": -100,
+                        "maximum": 100,
+                        "default": 100,
+                        "must_have_bool": "track_causant",
+                    },
+                    "causant_min_2_bond_required": {
+                        "type": "number",
+                        "description": "Indicates the minimum second bond level required for this state to be activated by a causant agent.",
+                        "minimum": 0,
+                        "maximum": 100,
+                        "default": 0,
+                        "must_have_bool": "track_causant",
+                    },
+                    "causant_max_2_bond_required": {
+                        "type": "number",
+                        "description": "Indicates the maximum second bond level required for this state to be activated by a causant agent.",
+                        "minimum": 0,
+                        "maximum": 100,
+                        "default": 100,
+                        "must_have_bool": "track_causant",
                     },
                     "automatic_trigger": {
                         "type": "boolean",
@@ -202,9 +335,9 @@ export default {
                     },
                     "decay_rate_per_inference": {
                         "type": "number",
-                        "description": "The decay rate per inference for this state, a value between 0 and 3.",
+                        "description": "The decay rate per inference for this state, a value between 0 and 4.",
                         "minimum": 0,
-                        "maximum": 3
+                        "maximum": 4
                     },
                     "manual_triggers": {
                         "type": "array",
@@ -214,7 +347,7 @@ export default {
                             "properties": {
                                 "if": {
                                     "type": "string",
-                                    "description": "The ensure rule to add into the prompt to trigger this state, always starts as if, eg. {{user}} and {{char}} are alone together"
+                                    "description": "The ensure rule to add into the prompt to trigger this state, always starts as if, eg. {{other}} and {{char}} are alone together"
                                 }
                             }
                         },
@@ -228,15 +361,48 @@ export default {
                             "properties": {
                                 "if": {
                                     "type": "string",
-                                    "description": "The ensure rule to add into the prompt to relieve this state, always starts as if, eg. {{user}} comforts {{char}}"
+                                    "description": "The ensure rule to add into the prompt to relieve this state, always starts as if, eg. {{other}} comforts {{char}}"
                                 }
                             }
                         }
                     },
-                    "active_behaviour": {
+                    "describes_action": {
                         "type": "boolean",
-                        "description": "Indicates if this state represents a behaviour that is actively shown by the character when the state is active. Rather than a mental state."
-                    }
+                        "description": "Indicates if this state describes an action the character takes, useful for states that indicate behaviours. When it is an action, there is no intensity associated with it.",
+                    },
+                    "starting_intensity": {
+                        "type": "number",
+                        "description": "The starting intensity of the state when it is first triggered, a value between 0 and 4.",
+                        "minimum": 0,
+                        "maximum": 4
+                    },
+                    "bond_mini": {
+                        "type": "boolean",
+                        "description": "Indicates if this state gives a mini bond bonus when active, useful for states that indicate positive emotions or behaviours.",
+                    },
+                    "relief_uses_decay_rate": {
+                        "type": "boolean",
+                        "description": "Indicates if the relief of this state uses the decay rate per inference to determine how much intensity is lost when relieved.",
+                        "must_have_bool": "relief_uses_decay_rate",
+                    },
+                    "decay_rate_after_relief": {
+                        "type": "number",
+                        "description": "The decay rate applied after the state has been relieved, a value between 0 and 4.",
+                        "minimum": 0,
+                        "maximum": 4
+                    },
+                    "permanent": {
+                        "type": "boolean",
+                        "description": "Indicates if this state is permanent and cannot be relieved or decayed from the 1 value, useful for states that indicate permanent conditions or traits.",
+                    },
+                    "injury_and_death": {
+                        "type": "boolean",
+                        "description": "Indicates if this state is related to injury and death, useful for states that indicate critical conditions and we want to set in a separate inference step to avoid polluting other state logic.",
+                    },
+                    "track_causant": {
+                        "type": "boolean",
+                        "description": "Indicates if this state tracks who or what caused it to be activated, useful for states that may need to reference their causant later.",
+                    },
                 },
                 "required": [
                     "common_state_experienced_by_character",
@@ -291,10 +457,6 @@ export default {
                         },
                         "minItems": 1
                     },
-                    "trigger_dead_end": {
-                        "type": "string",
-                        "description": "Indicates if this bond triggers a dead end and which one."
-                    },
                     "2nd_bond_increase_questions": {
                         "type": "array",
                         "description": "Rules for increasing the second bond level when this bond is active.",
@@ -313,9 +475,9 @@ export default {
                     },
                     "description": {
                         "type": "string",
-                        "description": "The description of the bond, use {{char}} and {{user}} as placeholders."
+                        "description": "The description of the bond, use {{char}} and {{other}} as placeholders."
                     },
-                    "states": {
+                    "state_overrides": {
                         "type": "object",
                         "description": "State prompt injections associated with this bond.",
                         "additionalProperties": {
@@ -323,11 +485,11 @@ export default {
                             "properties": {
                                 "description": {
                                     "type": "string",
-                                    "description": "The prompt injection text for this state, use {{char}} and {{user}} as placeholders; eg. {{char}} is now happy and will cheer {{user}}"
+                                    "description": "The prompt injection text for this state, use {{char}} and {{other}} as placeholders; eg. {{char}} is now happy and will cheer {{other}}"
                                 },
                                 "initial_message": {
                                     "type": "string",
-                                    "description": "If specified, forces an initial message action when this bond is activated, use {{char}} and {{user}} as placeholders; eg. {{char}} smiles at {{user}}"
+                                    "description": "If specified, forces an initial message action when this bond is activated, use {{char}} and {{other}} as placeholders; eg. {{char}} smiles at {{other}}"
                                 },
                                 "manual_triggers": {
                                     "type": "array",
@@ -337,7 +499,7 @@ export default {
                                         "properties": {
                                             "if": {
                                                 "type": "string",
-                                                "description": "The ensure rule to add into the prompt to trigger this state, always starts as if, eg. {{user}} and {{char}} are alone together"
+                                                "description": "The ensure rule to add into the prompt to trigger this state, always starts as if, eg. {{other}} and {{char}} are alone together"
                                             }
                                         }
                                     },
@@ -351,7 +513,7 @@ export default {
                                         "properties": {
                                             "if": {
                                                 "type": "string",
-                                                "description": "The ensure rule to add into the prompt to relieve this state, always starts as if, eg. {{user}} comforts {{char}}"
+                                                "description": "The ensure rule to add into the prompt to relieve this state, always starts as if, eg. {{other}} comforts {{char}}"
                                             }
                                         }
                                     },
@@ -372,36 +534,6 @@ export default {
                 ]
             },
             "minItems": 1
-        },
-        "dead_ends": {
-            "title": "Character Dead Ends",
-            "description": "Defines the dead ends associated with the character.",
-            "type": "object",
-            "additionalProperties": {
-                "type": "object",
-                "properties": {
-                    "description": {
-                        "type": "string",
-                        "description": "The description of the dead end scenario, use {{char}} and {{user}} as placeholders."
-                    },
-                    "whole_run": {
-                        "type": "boolean",
-                        "description": "Indicates if this dead end ends the whole run (aka. the story)."
-                    },
-                    "manual_check": {
-                        "type": "boolean",
-                        "description": "Indicates if this dead end requires a manual check to trigger. If no manual check is provided, it will only trigger if it's in a bond"
-                    },
-                    "manual_check_description": {
-                        "type": "string",
-                        "description": "The description for the manual check, use {{char}} and {{user}} as placeholders."
-                    }
-                },
-                "required": [
-                    "description",
-                    "whole_run"
-                ]
-            }
         },
         "emotions": {
             "title": "Character Emotions",

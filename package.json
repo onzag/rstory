@@ -20,5 +20,8 @@
   },
   "devDependencies": {
     "electron": "^39.2.7"
+  },
+  "dependencies": {
+    "codemirror": "^6.0.2"
   }
 }
